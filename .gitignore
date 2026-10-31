@@ -32,6 +32,16 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# prisma generated client
+/src/generated/prisma
+
+# local agent skill installs
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
 
 # vercel
 .vercel
