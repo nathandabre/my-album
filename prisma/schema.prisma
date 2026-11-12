@@ -10,47 +10,82 @@ datasource db {
   provider = "postgresql"
 }
 
+enum AlbumVisibility {
+  PRIVATE
+  UNLISTED
+  PASSWORD
+}
+
 model User {
   id        String   @id @default(cuid())
   clerkId   String   @unique
-  email     String   @unique
+  email     String
   name      String?
   imageUrl  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  albums    Album[]
+
+  albums Album[]
 }
 
 model Album {
-  id          String   @id @default(cuid())
+  id      String @id @default(cuid())
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
   title       String
   description String?
-  coverUrl    String?
-  shareSlug   String   @unique @default(cuid())
-  isPublic    Boolean  @default(true)
-  password    String?
-  ownerId     String
-  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  photos      Photo[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
-  @@index([ownerId])
-  @@index([shareSlug])
-}
+  coverPhotoId String? @unique
+  coverPhoto   Photo?  @relation("AlbumCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
 
-model Photo {
-  id        String   @id @default(cuid())
-  albumId   String
-  album     Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
-  url       String
-  key       String?
-  caption   String?
-  width     Int?
-  height    Int?
-  sortOrder Int      @default(0)
+  shareSlug     String          @unique
+  visibility    AlbumVisibility @default(UNLISTED)
+  passwordHash  String?
+  allowDownload Boolean         @default(false)
+  expiresAt     DateTime?
+
+  photos Photo[] @relation("AlbumPhotos")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([albumId])
+  @@index([ownerId, createdAt])
+}
+
+model Photo {
+  id      String @id @default(cuid())
+  albumId String
+  album   Album  @relation("AlbumPhotos", fields: [albumId], references: [id], onDelete: Cascade)
+
+  imagekitFileId String  @unique
+  filePath       String
+  caption        String?
+  width          Int
+  height         Int
+  sizeBytes      Int
+  mimeType       String
+
+  sortOrder Int @default(0)
+
+  coverFor  Album?          @relation("AlbumCover")
+  favorites AlbumFavorite[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([albumId, sortOrder])
+}
+
+model AlbumFavorite {
+  id      String @id @default(cuid())
+  photoId String
+  photo   Photo  @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  guestId   String
+  guestName String?
+  createdAt DateTime @default(now())
+
+  @@unique([photoId, guestId])
+  @@index([photoId])
 }

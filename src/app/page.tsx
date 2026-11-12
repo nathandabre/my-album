@@ -1,6 +1,28 @@
+import { Suspense } from "react";
 import Link from "next/link";
+import { Show } from "@clerk/nextjs";
 
 import { Button } from "@/components/ui/button";
+
+function AuthButtons() {
+  return (
+    <>
+      <Show when="signed-in">
+        <Link href="/dashboard">
+          <Button>Go to Dashboard</Button>
+        </Link>
+      </Show>
+      <Show when="signed-out">
+        <Link href="/dashboard">
+          <Button>Open dashboard</Button>
+        </Link>
+        <Link href="/sign-in">
+          <Button variant="outline">Sign in</Button>
+        </Link>
+      </Show>
+    </>
+  );
+}
 
 export default function Home() {
   return (
@@ -16,12 +38,15 @@ export default function Home() {
         clean, shareable gallery link.
       </p>
       <div className="flex flex-wrap gap-3">
-        <Link href="/dashboard">
-          <Button>Open dashboard</Button>
-        </Link>
-        <Link href="/sign-in">
-          <Button variant="outline">Sign in</Button>
-        </Link>
+        <Suspense
+          fallback={
+            <Link href="/sign-in">
+              <Button variant="outline">Sign in</Button>
+            </Link>
+          }
+        >
+          <AuthButtons />
+        </Suspense>
       </div>
     </main>
   );

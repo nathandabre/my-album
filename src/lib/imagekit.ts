@@ -49,3 +49,17 @@ export async function uploadImageToImageKit(
       : undefined,
   });
 }
+
+export function getImageKitUrl(filePath: string, transformations?: string): string {
+  if (!filePath) return "";
+  if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
+    return filePath;
+  }
+  const endpoint = (process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT ?? "").replace(/\/$/, "");
+  const normalizedPath = filePath.startsWith("/") ? filePath : `/${filePath}`;
+  if (transformations) {
+    return `${endpoint}/tr:${transformations}${normalizedPath}`;
+  }
+  return `${endpoint}${normalizedPath}`;
+}
+
