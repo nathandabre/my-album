@@ -25,9 +25,11 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { uploadImageToImageKit, getImageKitUrl } from "@/lib/imagekit";
+import { uploadImageToImageKit } from "@/lib/imagekit";
+import { getAlbumMediaUrl } from "@/lib/album-media-url";
 import {
   addPhotosToAlbumAction,
+  cleanupFailedImageKitUploadsAction,
   deletePhotoAction,
   setAlbumCoverAction,
   updatePhotoCaptionAction,
@@ -40,22 +42,17 @@ import { AlbumVisibility } from "@/generated/prisma/enums";
 
 type PhotoFavorite = {
   id: string;
-  guestId: string;
   guestName: string | null;
-  createdAt: Date;
 };
 
 type PhotoItem = {
   id: string;
-  imagekitFileId: string;
-  filePath: string;
   caption: string | null;
   width: number;
   height: number;
   sizeBytes: number;
   mimeType: string;
   sortOrder: number;
-  createdAt: Date;
   favorites?: PhotoFavorite[];
 };
 
@@ -69,7 +66,6 @@ type AlbumDetail = {
   coverPhotoId: string | null;
   coverPhoto: {
     id: string;
-    filePath: string;
   } | null;
   expiresAt?: Date | null;
   createdAt: Date;
@@ -182,14 +178,13 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
     setUploadProgress(0);
 
     const uploadedPayloads = [];
+    const uploadedFileIds: string[] = [];
 
     try {
       for (const [index, file] of files.entries()) {
-        const isVideo = file.type.startsWith("video/");
         setUploadStatusText(`Uploading ${index + 1} of ${files.length} media files…`);
 
-        const result = await uploadImageToImageKit(file, {
-          folder: `/albums/${album.id}`,
+        const result = await uploadImageToImageKit(file, album.id, {
           onProgress: (percent) => {
             const overall = Math.round(
               ((index + percent / 100) / files.length) * 100,
@@ -198,17 +193,14 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
           },
         });
 
-        if (!result.fileId || !result.filePath) {
+        if (result.fileId) uploadedFileIds.push(result.fileId);
+        if (!result.fileId || !result.filePath || result.isPrivateFile !== true) {
           throw new Error(`ImageKit did not return valid metadata for ${file.name}.`);
         }
 
         uploadedPayloads.push({
           imagekitFileId: result.fileId,
-          filePath: result.filePath,
           caption: file.name.replace(/\.[^/.]+$/, ""),
-          width: result.width && result.width > 0 ? result.width : isVideo ? 0 : 1920,
-          height: result.height && result.height > 0 ? result.height : isVideo ? 0 : 1080,
-          sizeBytes: result.size ?? file.size,
           mimeType: file.type,
         });
       }
@@ -217,13 +209,41 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
       const addRes = await addPhotosToAlbumAction(album.id, uploadedPayloads);
 
       if (addRes.error) {
-        setUploadError(addRes.error);
+        const cleanup = await cleanupFailedImageKitUploadsAction(
+          album.id,
+          uploadedFileIds,
+        );
+        setUploadError(
+          (typeof cleanup.cleanupPending === "number"
+            ? cleanup.cleanupPending > 0
+            : uploadedFileIds.length > 0)
+            ? `${addRes.error} Storage cleanup is pending.`
+            : addRes.error,
+        );
       } else {
         router.refresh();
       }
     } catch (err) {
+      let cleanupPending = 0;
+      if (uploadedFileIds.length > 0) {
+        try {
+          const cleanup = await cleanupFailedImageKitUploadsAction(
+            album.id,
+            uploadedFileIds,
+          );
+          cleanupPending =
+            typeof cleanup.cleanupPending === "number"
+              ? cleanup.cleanupPending
+              : uploadedFileIds.length;
+        } catch {
+          cleanupPending = uploadedFileIds.length;
+        }
+      }
+      const message = err instanceof Error ? err.message : "Failed to upload media.";
       setUploadError(
-        err instanceof Error ? err.message : "Failed to upload images",
+        cleanupPending > 0
+          ? `${message} Storage cleanup is pending for ${cleanupPending} file(s).`
+          : message,
       );
     } finally {
       setIsUploading(false);
@@ -235,7 +255,12 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
 
   async function handleDeletePhoto(photoId: string) {
     setDeletingPhotoId(photoId);
-    await deletePhotoAction(album.id, photoId);
+    const result = await deletePhotoAction(album.id, photoId);
+    if (result.error) {
+      setUploadError(result.error);
+    } else if (result.cleanupPending) {
+      setUploadError("Photo removed from the album; ImageKit cleanup is pending.");
+    }
     setDeletingPhotoId(null);
     router.refresh();
   }
@@ -457,11 +482,16 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                 <div className="flex flex-col sm:flex-row items-start gap-4">
                   <div className="relative w-full sm:w-48 aspect-[16/10] rounded-xl overflow-hidden bg-muted shrink-0">
                     <Image
-                      src={getImageKitUrl(album.coverPhoto.filePath, "w-400,h-250,fo-auto,q-80")}
+                      src={getAlbumMediaUrl(
+                        album.shareSlug,
+                        album.coverPhoto.id,
+                        "w-400,h-250,fo-auto,q-80",
+                      )}
                       alt="Current album cover"
                       fill
                       sizes="192px"
                       className="object-cover"
+                      unoptimized
                     />
                   </div>
                   <div className="flex flex-col gap-2">
@@ -507,8 +537,9 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
               {album.photos.map((photo) => {
                 const isVideo = photo.mimeType.startsWith("video/");
                 const isCover = album.coverPhotoId === photo.id;
-                const thumbnailUrl = getImageKitUrl(
-                  photo.filePath,
+                const thumbnailUrl = getAlbumMediaUrl(
+                  album.shareSlug,
+                  photo.id,
                   isVideo ? undefined : "w-600,h-450,fo-auto,q-80",
                 );
                 const favCount = photo.favorites?.length || 0;
@@ -536,6 +567,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                           fill
                           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
                           className="object-cover"
+                          unoptimized
                         />
                       )}
 
@@ -688,7 +720,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                       <div className="relative aspect-[4/3] w-full bg-muted">
                         {photo.mimeType.startsWith("video/") ? (
                           <video
-                            src={getImageKitUrl(photo.filePath)}
+                            src={getAlbumMediaUrl(album.shareSlug, photo.id)}
                             aria-label={photo.caption || "Album video"}
                             controls
                             controlsList="nodownload"
@@ -699,10 +731,15 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                           />
                         ) : (
                           <Image
-                            src={getImageKitUrl(photo.filePath, "w-600,h-450,fo-auto,q-80")}
+                            src={getAlbumMediaUrl(
+                              album.shareSlug,
+                              photo.id,
+                              "w-600,h-450,fo-auto,q-80",
+                            )}
                             alt={photo.caption || "Photo"}
                             fill
                             className="object-cover"
+                            unoptimized
                           />
                         )}
                         <div className="absolute top-2 right-2 flex items-center gap-1 rounded-full bg-rose-500 px-2 py-0.5 text-xs font-semibold text-white shadow-md">

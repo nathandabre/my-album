@@ -1,83 +1,108 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
-import { cookies } from "next/headers";
-import { auth } from "@clerk/nextjs/server";
-import { Clock, EyeOff } from "lucide-react";
 import type { Metadata } from "next";
 
-import { prisma } from "@/lib/db";
 import { AlbumVisibility } from "@/generated/prisma/enums";
-import { PublicGallery } from "@/components/gallery/public-gallery";
 import { PasswordGate } from "@/components/gallery/password-gate";
+import { PublicGallery } from "@/components/gallery/public-gallery";
+import { getAlbumAccessDecision } from "@/lib/album-access";
 import { getImageKitUrl } from "@/lib/imagekit";
+import { prisma } from "@/lib/db";
 
 type PublicAlbumPageProps = {
   params: Promise<{ shareSlug: string }>;
 };
 
+const privateMetadata: Metadata = {
+  title: "Gallery | my-album",
+  description: "This gallery is private or unavailable.",
+  robots: { index: false, follow: false },
+};
+
+async function findAccessRecord(shareSlug: string) {
+  return prisma.album.findUnique({
+    where: { shareSlug },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      visibility: true,
+      expiresAt: true,
+      updatedAt: true,
+      owner: { select: { clerkId: true } },
+    },
+  });
+}
+
 export async function generateMetadata({
   params,
 }: PublicAlbumPageProps): Promise<Metadata> {
   const { shareSlug } = await params;
-
-  const album = await prisma.album.findUnique({
-    where: { shareSlug },
-    include: {
-      owner: { select: { name: true } },
-      coverPhoto: { select: { filePath: true } },
-    },
-  });
-
-  if (!album) {
-    return {
-      title: "Album Not Found - my-album",
-    };
+  const album = await findAccessRecord(shareSlug);
+  if (!album || (await getAlbumAccessDecision(album)) !== "allowed") {
+    return privateMetadata;
   }
 
-  const coverUrl = album.coverPhoto
-    ? getImageKitUrl(album.coverPhoto.filePath, "w-1200,h-630,fo-auto,q-85")
+  const details = await prisma.album.findUnique({
+    where: { id: album.id },
+    select: {
+      owner: { select: { name: true } },
+      coverPhoto: { select: { id: true, albumId: true, filePath: true } },
+    },
+  });
+  const cover =
+    album.visibility === AlbumVisibility.UNLISTED &&
+    details?.coverPhoto?.albumId === album.id
+    ? getImageKitUrl(details.coverPhoto.filePath, "w-1200,h-630,fo-auto,q-85")
     : undefined;
+  const description =
+    album.description ||
+    `View photos from ${album.title} by ${details?.owner.name || "Photographer"}.`;
 
   return {
     title: `${album.title} | Photography Gallery`,
-    description:
-      album.description ||
-      `View photos from ${album.title} by ${album.owner.name || "Photographer"}.`,
+    description,
+    robots: { index: false, follow: false },
     openGraph: {
       title: album.title,
-      description:
-        album.description ||
-        `View photos from ${album.title} by ${album.owner.name || "Photographer"}.`,
-      images: coverUrl ? [{ url: coverUrl }] : [],
+      description,
+      images: cover ? [{ url: cover }] : [],
     },
   };
 }
 
 async function PublicAlbumContent({ params }: PublicAlbumPageProps) {
   const { shareSlug } = await params;
-  const { userId } = await auth();
+  const albumAccess = await findAccessRecord(shareSlug);
+  if (!albumAccess) notFound();
+
+  const decision = await getAlbumAccessDecision(albumAccess);
+  if (decision === "private" || decision === "expired") notFound();
+  if (decision === "password-required") {
+    return <PasswordGate shareSlug={shareSlug} />;
+  }
 
   const album = await prisma.album.findUnique({
-    where: { shareSlug },
-    include: {
+    where: { id: albumAccess.id },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      shareSlug: true,
+      visibility: true,
+      expiresAt: true,
+      updatedAt: true,
+      allowDownload: true,
       owner: {
-        select: {
-          name: true,
-          imageUrl: true,
-          clerkId: true,
-        },
+        select: { name: true, imageUrl: true, clerkId: true },
       },
       coverPhoto: {
-        select: {
-          id: true,
-          filePath: true,
-        },
+        select: { id: true, albumId: true, filePath: true },
       },
       photos: {
         orderBy: { sortOrder: "asc" },
         select: {
           id: true,
-          filePath: true,
           caption: true,
           width: true,
           height: true,
@@ -88,73 +113,40 @@ async function PublicAlbumContent({ params }: PublicAlbumPageProps) {
     },
   });
 
-  if (!album) {
+  if (!album || (await getAlbumAccessDecision(album)) !== "allowed") {
     notFound();
   }
 
-  const isOwner = Boolean(userId && album.owner.clerkId === userId);
-
-  // Check expiration
-  if (album.expiresAt && album.expiresAt < new Date() && !isOwner) {
-    return (
-      <main className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
-        <div className="rounded-full bg-muted p-4 text-muted-foreground mb-4">
-          <Clock className="h-8 w-8" />
-        </div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          Album Expired
-        </h1>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">
-          This gallery link has expired and is no longer publicly accessible. Please contact the photographer for access.
-        </p>
-      </main>
-    );
-  }
-
-  // Check Private visibility
-  if (album.visibility === AlbumVisibility.PRIVATE && !isOwner) {
-    return (
-      <main className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
-        <div className="rounded-full bg-muted p-4 text-muted-foreground mb-4">
-          <EyeOff className="h-8 w-8" />
-        </div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          Private Album
-        </h1>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">
-          This album is set to private and can only be viewed by its owner.
-        </p>
-      </main>
-    );
-  }
-
-  // Check Password visibility
-  if (album.visibility === AlbumVisibility.PASSWORD && !isOwner) {
-    const cookieStore = await cookies();
-    const isUnlocked = cookieStore.get(`unlocked_${shareSlug}`)?.value === "true";
-
-    if (!isUnlocked) {
-      return (
-        <PasswordGate
-          shareSlug={shareSlug}
-          albumTitle={album.title}
-        />
-      );
-    }
-  }
-
-  return <PublicGallery album={album} />;
+  return (
+    <PublicGallery
+      album={{
+        id: album.id,
+        title: album.title,
+        description: album.description,
+        shareSlug: album.shareSlug,
+        allowDownload: album.allowDownload,
+        owner: { name: album.owner.name, imageUrl: album.owner.imageUrl },
+        coverPhoto:
+          album.coverPhoto?.albumId === album.id
+            ? {
+                id: album.coverPhoto.id,
+              }
+            : null,
+        photos: album.photos,
+      }}
+    />
+  );
 }
 
 export default function PublicAlbumPage({ params }: PublicAlbumPageProps) {
   return (
     <Suspense
       fallback={
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 py-16 animate-pulse">
-          <div className="mx-auto h-6 w-48 rounded-full bg-muted mb-4" />
-          <div className="mx-auto h-12 w-96 rounded-2xl bg-muted mb-6" />
-          <div className="mx-auto h-4 w-64 rounded-lg bg-muted mb-12" />
-          <div className="columns-1 sm:columns-2 lg:columns-3 gap-4 space-y-4">
+        <div className="mx-auto max-w-7xl px-4 py-16 animate-pulse">
+          <div className="mx-auto mb-4 h-6 w-48 rounded-full bg-muted" />
+          <div className="mx-auto mb-6 h-12 w-96 rounded-2xl bg-muted" />
+          <div className="mx-auto mb-12 h-4 w-64 rounded-lg bg-muted" />
+          <div className="columns-1 gap-4 space-y-4 sm:columns-2 lg:columns-3">
             <div className="h-64 rounded-2xl bg-muted" />
             <div className="h-80 rounded-2xl bg-muted" />
             <div className="h-72 rounded-2xl bg-muted" />

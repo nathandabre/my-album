@@ -17,7 +17,7 @@ import {
 
 import { deleteAlbumAction } from "@/app/actions/albums";
 import { Button } from "@/components/ui/button";
-import { getImageKitUrl } from "@/lib/imagekit";
+import { getAlbumMediaUrl } from "@/lib/album-media-url";
 import { AlbumVisibility } from "@/generated/prisma/enums";
 
 export type AlbumCardData = {
@@ -30,7 +30,6 @@ export type AlbumCardData = {
   createdAt: Date;
   coverPhoto: {
     id: string;
-    filePath: string;
   } | null;
   _count: {
     photos: number;
@@ -48,7 +47,11 @@ export function AlbumCard({ album }: { album: AlbumCardData }) {
       : `/a/${album.shareSlug}`;
 
   const coverUrl = album.coverPhoto
-    ? getImageKitUrl(album.coverPhoto.filePath, "w-600,h-400,fo-auto,q-80")
+    ? getAlbumMediaUrl(
+        album.shareSlug,
+        album.coverPhoto.id,
+        "w-600,h-400,fo-auto,q-80",
+      )
     : null;
 
   async function handleCopy(e: React.MouseEvent) {
@@ -83,6 +86,7 @@ export function AlbumCard({ album }: { album: AlbumCardData }) {
             fill
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
             className="object-cover transition-transform duration-300 group-hover:scale-105"
+            unoptimized
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-muted to-muted/50 text-muted-foreground/60">

@@ -29,13 +29,20 @@ async function AlbumPageContent({ params }: AlbumPageProps) {
       ownerId: user.id,
     },
     include: {
-      coverPhoto: {
-        select: { id: true, filePath: true },
-      },
+      coverPhoto: { select: { id: true } },
       photos: {
         orderBy: { sortOrder: "asc" },
-        include: {
-          favorites: true,
+        select: {
+          id: true,
+          caption: true,
+          width: true,
+          height: true,
+          sizeBytes: true,
+          mimeType: true,
+          sortOrder: true,
+          favorites: {
+            select: { id: true, guestName: true },
+          },
         },
       },
     },

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { getImageKitUrl } from "@/lib/imagekit";
+import { getAlbumMediaUrl } from "@/lib/album-media-url";
 import {
   togglePhotoFavoriteAction,
   getGuestFavoritesAction,
@@ -22,7 +22,6 @@ import {
 
 type PhotoData = {
   id: string;
-  filePath: string;
   caption: string | null;
   width: number;
   height: number;
@@ -44,7 +43,6 @@ export type PublicGalleryProps = {
     allowDownload: boolean;
     coverPhoto?: {
       id: string;
-      filePath: string;
     } | null;
     owner: OwnerData;
     photos: PhotoData[];
@@ -53,26 +51,23 @@ export type PublicGalleryProps = {
 
 export function PublicGallery({ album }: { album: PublicGalleryProps["album"] }) {
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
-  const [guestId, setGuestId] = useState<string>("");
   const [activeFilter, setActiveFilter] = useState<"all" | "favorites">("all");
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [favoriteError, setFavoriteError] = useState<string | null>(null);
 
-  // Initialize or read persistent guest ID
+  // The server owns the anonymous session identity in an HTTP-only cookie.
   useEffect(() => {
-    let id = localStorage.getItem("my_album_guest_id");
-    if (!id) {
-      id = `guest_${Math.random().toString(36).substring(2, 10)}_${Date.now()}`;
-      localStorage.setItem("my_album_guest_id", id);
-    }
-    const currentId = id;
     const ids = album.photos.map((p) => p.id);
 
     Promise.resolve().then(async () => {
-      setGuestId(currentId);
       if (ids.length > 0) {
-        const favs = await getGuestFavoritesAction(ids, currentId);
-        setFavoriteIds(new Set(favs));
+        try {
+          const favs = await getGuestFavoritesAction(ids);
+          setFavoriteIds(new Set(favs));
+        } catch {
+          setFavoriteError("Your favorites could not be loaded. Please try again.");
+        }
       }
     });
   }, [album.photos]);
@@ -85,18 +80,38 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
 
   async function handleToggleFavorite(photoId: string, e?: React.MouseEvent) {
     e?.stopPropagation();
-    if (!guestId) return;
+    setFavoriteError(null);
 
     // Optimistic update
+    const wasFavorited = favoriteIds.has(photoId);
     const next = new Set(favoriteIds);
-    if (next.has(photoId)) {
+    if (wasFavorited) {
       next.delete(photoId);
     } else {
       next.add(photoId);
     }
     setFavoriteIds(next);
 
-    await togglePhotoFavoriteAction(photoId, guestId);
+    try {
+      const result = await togglePhotoFavoriteAction(photoId);
+      if (result.error) {
+        setFavoriteError("Your favorite could not be saved. Please try again.");
+        setFavoriteIds((current) => {
+          const reverted = new Set(current);
+          if (wasFavorited) reverted.add(photoId);
+          else reverted.delete(photoId);
+          return reverted;
+        });
+      }
+    } catch {
+      setFavoriteError("Your favorite could not be saved. Please try again.");
+      setFavoriteIds((current) => {
+        const reverted = new Set(current);
+        if (wasFavorited) reverted.add(photoId);
+        else reverted.delete(photoId);
+        return reverted;
+      });
+    }
   }
 
   async function handleShare() {
@@ -111,6 +126,10 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
 
   function getPhotoDownloadUrl(photo: PhotoData) {
     return `/api/albums/${encodeURIComponent(album.shareSlug)}/downloads/${encodeURIComponent(photo.id)}`;
+  }
+
+  function getPhotoMediaUrl(photoId: string, transformations?: string) {
+    return getAlbumMediaUrl(album.shareSlug, photoId, transformations);
   }
 
   // Lightbox keyboard navigation
@@ -154,12 +173,13 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
       {album.coverPhoto && (
         <div className="relative w-full h-48 sm:h-64 md:h-80 lg:h-96 bg-muted overflow-hidden">
           <Image
-            src={getImageKitUrl(album.coverPhoto.filePath, "w-1920,h-600,fo-auto,q-85")}
+            src={getPhotoMediaUrl(album.coverPhoto.id, "w-1920,h-600,fo-auto,q-85")}
             alt={`${album.title} cover`}
             fill
             sizes="100vw"
             className="object-cover"
             priority
+            unoptimized
           />
           <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent" />
         </div>
@@ -201,6 +221,11 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
 
           {/* Action Bar */}
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+            {favoriteError && (
+              <p role="alert" className="w-full text-sm text-destructive">
+                {favoriteError}
+              </p>
+            )}
             {/* Filter Pills */}
             <div className="inline-flex rounded-full border border-border bg-card p-1 shadow-sm">
               <button
@@ -286,8 +311,8 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
             {displayedPhotos.map((photo, index) => {
               const isFav = favoriteIds.has(photo.id);
               const isVideo = photo.mimeType.startsWith("video/");
-              const previewUrl = getImageKitUrl(
-                photo.filePath,
+              const previewUrl = getPhotoMediaUrl(
+                photo.id,
                 isVideo ? undefined : "w-800,q-80",
               );
 
@@ -317,6 +342,7 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
                       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, (max-width: 1280px) 33vw, 25vw"
                       className="h-auto w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
                       loading="lazy"
+                      unoptimized
                     />
                   )}
 
@@ -459,7 +485,7 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
           >
             {activePhoto.mimeType.startsWith("video/") ? (
               <video
-                src={getImageKitUrl(activePhoto.filePath)}
+                src={getPhotoMediaUrl(activePhoto.id)}
                 aria-label={activePhoto.caption || "Album video"}
                 controls
                 controlsList="nodownload"
@@ -468,12 +494,13 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
               />
             ) : (
               <Image
-                src={getImageKitUrl(activePhoto.filePath, "w-2000,q-90")}
+                src={getPhotoMediaUrl(activePhoto.id, "w-2000,q-90")}
                 alt={activePhoto.caption || "Enlarged photo"}
                 width={activePhoto.width}
                 height={activePhoto.height}
                 className="max-h-full max-w-full rounded-lg object-contain shadow-2xl animate-in zoom-in-95 duration-150"
                 priority
+                unoptimized
               />
             )}
           </div>

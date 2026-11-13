@@ -53,6 +53,7 @@ model Album {
   photos Photo[]      @relation("AlbumPhotos")
   pages  AlbumPage[]
   assets AlbumAsset[]
+  passwordAttempts AlbumPasswordAttempt[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -90,7 +91,8 @@ model AlbumAsset {
   fileName       String
   mimeType       String
   type           AlbumAssetType
-  width          Int            @default(0)
+  isPrivate      Boolean          @default(false)
+  width          Int              @default(0)
   height         Int            @default(0)
   sizeBytes      Int
 
@@ -114,6 +116,7 @@ model Photo {
   height         Int
   sizeBytes      Int
   mimeType       String
+  isPrivate      Boolean @default(false)
 
   sortOrder Int @default(0)
 
@@ -137,4 +140,20 @@ model AlbumFavorite {
 
   @@unique([photoId, guestId])
   @@index([photoId])
+  @@index([guestId, photoId])
+}
+
+model AlbumPasswordAttempt {
+  id      String @id @default(cuid())
+  albumId String
+  album   Album  @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  clientKey      String
+  failedAttempts Int       @default(0)
+  windowStartedAt DateTime @default(now())
+  lockedUntil    DateTime?
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([albumId, clientKey])
+  @@index([lockedUntil])
 }

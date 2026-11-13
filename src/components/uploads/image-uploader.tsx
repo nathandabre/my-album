@@ -16,12 +16,12 @@ type UploadedImage = {
 };
 
 type ImageUploaderProps = {
-  folder?: string;
+  albumId: string;
   onUploaded?: (files: UploadedImage[]) => void;
 };
 
 export function ImageUploader({
-  folder = "/albums",
+  albumId,
   onUploaded,
 }: ImageUploaderProps) {
   const [isUploading, setIsUploading] = useState(false);
@@ -40,8 +40,7 @@ export function ImageUploader({
       const uploaded: UploadedImage[] = [];
 
       for (const [index, file] of files.entries()) {
-        const result = await uploadImageToImageKit(file, {
-          folder,
+        const result = await uploadImageToImageKit(file, albumId, {
           onProgress: (fileProgress) => {
             const overall = Math.round(
               ((index + fileProgress / 100) / files.length) * 100,

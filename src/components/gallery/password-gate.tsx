@@ -9,10 +9,8 @@ import { verifyAlbumPasswordAction } from "@/app/actions/albums";
 
 export function PasswordGate({
   shareSlug,
-  albumTitle,
 }: {
   shareSlug: string;
-  albumTitle: string;
 }) {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -51,7 +49,7 @@ export function PasswordGate({
           Protected Album
         </h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">&quot;{albumTitle}&quot;</span> is password protected by the photographer. Please enter the access code to continue.
+          This album is password protected. Enter the access code to continue.
         </p>
 
         <form onSubmit={handleUnlock} className="mt-6 space-y-4 text-left">

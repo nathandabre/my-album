@@ -6,7 +6,7 @@ import { Camera, Image as ImageIcon, Sparkles, FolderKanban } from "lucide-react
 import { prisma } from "@/lib/db";
 import { getCurrentDbUser } from "@/lib/auth";
 import { CreateAlbumDialog } from "@/components/dashboard/create-album-dialog";
-import { AlbumCard, AlbumCardData } from "@/components/dashboard/album-card";
+import { AlbumCard } from "@/components/dashboard/album-card";
 
 async function DashboardContent() {
   const { userId } = await auth();
@@ -20,18 +20,18 @@ async function DashboardContent() {
     redirect("/sign-in");
   }
 
-  const albums = (await prisma.album.findMany({
+  const albums = await prisma.album.findMany({
     where: { ownerId: user.id },
     include: {
       coverPhoto: {
-        select: { id: true, filePath: true },
+        select: { id: true },
       },
       _count: {
         select: { photos: true },
       },
     },
     orderBy: { createdAt: "desc" },
-  })) as unknown as AlbumCardData[];
+  });
 
   const totalPhotos = albums.reduce((acc, curr) => acc + curr._count.photos, 0);
 
