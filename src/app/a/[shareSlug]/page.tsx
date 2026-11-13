@@ -8,6 +8,10 @@ import { PublicGallery } from "@/components/gallery/public-gallery";
 import { getAlbumAccessDecision } from "@/lib/album-access";
 import { getImageKitUrl } from "@/lib/imagekit";
 import { prisma } from "@/lib/db";
+import {
+  encodeGalleryCursor,
+  GALLERY_PAGE_SIZE,
+} from "@/lib/gallery-pagination";
 
 type PublicAlbumPageProps = {
   params: Promise<{ shareSlug: string }>;
@@ -100,7 +104,8 @@ async function PublicAlbumContent({ params }: PublicAlbumPageProps) {
         select: { id: true, albumId: true, filePath: true },
       },
       photos: {
-        orderBy: { sortOrder: "asc" },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+        take: GALLERY_PAGE_SIZE + 1,
         select: {
           id: true,
           caption: true,
@@ -108,14 +113,20 @@ async function PublicAlbumContent({ params }: PublicAlbumPageProps) {
           height: true,
           sizeBytes: true,
           mimeType: true,
+          sortOrder: true,
         },
       },
+      _count: { select: { photos: true } },
     },
   });
 
   if (!album || (await getAlbumAccessDecision(album)) !== "allowed") {
     notFound();
   }
+
+  const hasMorePhotos = album.photos.length > GALLERY_PAGE_SIZE;
+  const photos = album.photos.slice(0, GALLERY_PAGE_SIZE);
+  const lastPhoto = photos.at(-1);
 
   return (
     <PublicGallery
@@ -132,7 +143,17 @@ async function PublicAlbumContent({ params }: PublicAlbumPageProps) {
                 id: album.coverPhoto.id,
               }
             : null,
-        photos: album.photos,
+        photos: photos.map((photo) => ({
+          id: photo.id,
+          caption: photo.caption,
+          width: photo.width,
+          height: photo.height,
+          sizeBytes: photo.sizeBytes,
+          mimeType: photo.mimeType,
+        })),
+        photoCount: album._count.photos,
+        nextCursor:
+          hasMorePhotos && lastPhoto ? encodeGalleryCursor(lastPhoto) : null,
       }}
     />
   );

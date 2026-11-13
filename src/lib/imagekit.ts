@@ -1,97 +1,74 @@
-import { upload, type UploadResponse } from "@imagekit/next";
+import { z } from "zod";
 
-export type ImageKitAuthParams = {
-  token: string;
-  expire: number;
-  signature: string;
-  publicKey: string;
+const uploadResponseSchema = z.object({
+  fileId: z.string().min(1),
+  filePath: z.string().min(1),
+  name: z.string().min(1),
+  mimeType: z.string().min(1),
+  width: z.number().int().nonnegative(),
+  height: z.number().int().nonnegative(),
+  sizeBytes: z.number().int().positive(),
+  isPrivateFile: z.literal(true),
+});
+
+export type UploadResponse = z.infer<typeof uploadResponseSchema> & {
+  url?: string;
 };
-
-export async function getImageKitUploadAuth(
-  albumId: string,
-): Promise<ImageKitAuthParams & { folder: string }> {
-  const response = await fetch("/api/upload-auth", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ albumId }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`ImageKit authorization failed (${response.status})`);
-  }
-
-  const responseBody: unknown = await response.json();
-  if (
-    !responseBody ||
-    typeof responseBody !== "object" ||
-    !("token" in responseBody) ||
-    !("expire" in responseBody) ||
-    !("signature" in responseBody) ||
-    !("publicKey" in responseBody) ||
-    !("folder" in responseBody) ||
-    typeof responseBody.token !== "string" ||
-    typeof responseBody.expire !== "number" ||
-    typeof responseBody.signature !== "string" ||
-    typeof responseBody.publicKey !== "string" ||
-    typeof responseBody.folder !== "string"
-  ) {
-    throw new Error("ImageKit authorization response is invalid");
-  }
-  return {
-    token: responseBody.token,
-    expire: responseBody.expire,
-    signature: responseBody.signature,
-    publicKey: responseBody.publicKey,
-    folder: responseBody.folder,
-  };
-}
 
 export async function uploadMediaToImageKit(
   file: File,
   albumId: string,
-  options?: {
-    tags?: string[];
-    onProgress?: (progress: number) => void;
-  },
+  options?: { onProgress?: (progress: number) => void },
 ): Promise<UploadResponse> {
-  const { token, expire, signature, publicKey, folder } =
-    await getImageKitUploadAuth(albumId);
+  const formData = new FormData();
+  formData.append("file", file);
 
-  return upload({
-    file,
-    fileName: file.name,
-    publicKey,
-    token,
-    expire,
-    signature,
-    folder,
-    isPrivateFile: true,
-    responseFields: ["isPrivateFile"],
-    tags: options?.tags,
-    useUniqueFileName: true,
-    onProgress: options?.onProgress
-      ? (event) => {
-          if (event.total > 0) {
-            options.onProgress?.(Math.round((event.loaded / event.total) * 100));
-          }
-        }
-      : undefined,
+  const response = await new Promise<XMLHttpRequest>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(
+      "POST",
+      `/api/albums/${encodeURIComponent(albumId)}/upload`,
+    );
+    request.responseType = "json";
+    request.setRequestHeader("Accept", "application/json");
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        options?.onProgress?.(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    request.onerror = () => reject(new Error("Media upload request failed."));
+    request.onabort = () => reject(new Error("Media upload was cancelled."));
+    request.onload = () => resolve(request);
+    request.send(formData);
   });
+
+  const body: unknown = response.response;
+  if (response.status < 200 || response.status >= 300) {
+    const error =
+      body && typeof body === "object" && "error" in body &&
+      typeof body.error === "string"
+        ? body.error
+        : "Media upload failed.";
+    throw new Error(error);
+  }
+  const parsed = uploadResponseSchema.safeParse(body);
+  if (!parsed.success) throw new Error("Media upload response is invalid.");
+  options?.onProgress?.(100);
+  return parsed.data;
 }
 
 export async function uploadImageToImageKit(
   file: File,
   albumId: string,
-  options?: {
-    tags?: string[];
-    onProgress?: (progress: number) => void;
-  },
-): Promise<UploadResponse> {
+  options?: { onProgress?: (progress: number) => void },
+) {
   return uploadMediaToImageKit(file, albumId, options);
 }
 
-export function getImageKitUrl(filePath: string, transformations?: string): string {
-  if (!filePath) return "";
+export function getImageKitUrl(
+  filePath: string,
+  transformations?: string,
+): string {
   if (
     !filePath.startsWith("/albums/") ||
     filePath.includes("\\") ||
@@ -106,7 +83,11 @@ export function getImageKitUrl(filePath: string, transformations?: string): stri
   if (!endpoint) return "";
   try {
     const endpointUrl = new URL(endpoint);
-    if (endpointUrl.protocol !== "https:" || endpointUrl.username || endpointUrl.password) {
+    if (
+      endpointUrl.protocol !== "https:" ||
+      endpointUrl.username ||
+      endpointUrl.password
+    ) {
       return "";
     }
     const endpointPath = endpointUrl.pathname.replace(/\/+$/, "");

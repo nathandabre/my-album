@@ -28,6 +28,11 @@ import { Button } from "@/components/ui/button";
 import { uploadImageToImageKit } from "@/lib/imagekit";
 import { getAlbumMediaUrl } from "@/lib/album-media-url";
 import {
+  MAX_IMAGE_BYTES,
+  MAX_VIDEO_BYTES,
+  supportedMediaTypeSchema,
+} from "@/lib/media-upload-policy";
+import {
   addPhotosToAlbumAction,
   cleanupFailedImageKitUploadsAction,
   deletePhotoAction,
@@ -73,18 +78,6 @@ type AlbumDetail = {
 };
 
 const MAX_PHOTOS_PER_UPLOAD = 100;
-const MAX_IMAGE_BYTES = 200_000_000;
-const MAX_VIDEO_BYTES = 2_000_000_000;
-const ALLOWED_MEDIA_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "video/mp4",
-  "video/quicktime",
-  "video/webm",
-]);
 
 export function AlbumEditor({ album }: { album: AlbumDetail }) {
   const router = useRouter();
@@ -162,7 +155,11 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
         const maxBytes = file.type.startsWith("video/")
           ? MAX_VIDEO_BYTES
           : MAX_IMAGE_BYTES;
-        return !ALLOWED_MEDIA_TYPES.has(file.type) || file.size <= 0 || file.size > maxBytes;
+        return (
+          !supportedMediaTypeSchema.safeParse(file.type).success ||
+          file.size <= 0 ||
+          file.size > maxBytes
+        );
       },
     );
     if (invalidFile) {
@@ -258,7 +255,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
     const result = await deletePhotoAction(album.id, photoId);
     if (result.error) {
       setUploadError(result.error);
-    } else if (result.cleanupPending) {
+    } else if (result.cleanupQueued) {
       setUploadError("Photo removed from the album; ImageKit cleanup is pending.");
     }
     setDeletingPhotoId(null);

@@ -4,13 +4,14 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { getAlbumAccessDecision } from "@/lib/album-access";
+import { albumImageCoverExists } from "@/lib/album-validation";
 import { requireDbUser } from "@/lib/auth";
 import { getGuestSessionId } from "@/lib/guest-session";
 import {
-  deleteImageKitFileFromAlbum,
   verifyImageKitUpload,
   type VerifiedImageKitUpload,
 } from "@/lib/imagekit-server";
+import { enqueueMediaCleanup, enqueueUnlinkedMediaCleanup } from "@/lib/media-cleanup";
 import { prisma } from "@/lib/db";
 
 const MAX_PHOTOS_PER_UPLOAD = 100;
@@ -47,14 +48,8 @@ const failedUploadCleanupSchema = z
 export type UploadedPhotoPayload = z.infer<typeof uploadSchema>;
 
 async function cleanupAlbumFiles(albumId: string, fileIds: string[]) {
-  const results = await Promise.allSettled(
-    fileIds.map((fileId) => deleteImageKitFileFromAlbum(albumId, fileId)),
-  );
-  const failures = results.filter((result) => result.status === "rejected").length;
-  if (failures > 0) {
-    console.error("ImageKit media cleanup failed", { failures });
-  }
-  return failures;
+  await enqueueUnlinkedMediaCleanup(albumId, fileIds);
+  return fileIds.length;
 }
 
 const accessiblePhotoSelect = {
@@ -116,6 +111,16 @@ export async function addPhotosToAlbumAction(
   let createdPhotoCount: number;
   try {
     const createdPhotos = await prisma.$transaction(async (tx) => {
+      const cleanupJobs = await tx.mediaCleanupJob.findMany({
+        where: {
+          imagekitFileId: { in: verifiedUploads.map((item) => item.fileId) },
+        },
+        select: { imagekitFileId: true },
+      });
+      if (cleanupJobs.length > 0) {
+        throw new Error("An uploaded file is already queued for cleanup");
+      }
+
       const lastPhoto = await tx.photo.findFirst({
         where: { albumId },
         orderBy: { sortOrder: "desc" },
@@ -152,7 +157,7 @@ export async function addPhotosToAlbumAction(
         });
       }
       return created;
-    });
+    }, { isolationLevel: "Serializable" });
     createdPhotoCount = createdPhotos.length;
   } catch (error) {
     await cleanupAlbumFiles(
@@ -255,23 +260,19 @@ export async function deletePhotoAction(
         data: { coverPhotoId: nextPhoto?.id ?? null },
       });
     }
+    const photo = await tx.photo.findFirst({
+      where: { id: photoId, albumId },
+      select: { imagekitFileId: true },
+    });
+    if (!photo) return;
+    await enqueueMediaCleanup(tx, albumId, photo.imagekitFileId);
     await tx.photo.delete({ where: { id: photoId, albumId } });
   });
-
-  let cleanupPending = false;
-  try {
-    await deleteImageKitFileFromAlbum(albumId, photo.imagekitFileId);
-  } catch (error) {
-    cleanupPending = true;
-    console.error("Deleted photo could not be removed from ImageKit", {
-      error: error instanceof Error ? error.name : "UnknownError",
-    });
-  }
 
   revalidatePath(`/dashboard/albums/${albumId}`);
   revalidatePath("/dashboard");
   revalidatePath(`/a/${album.shareSlug}`);
-  return { success: true, cleanupPending };
+  return { success: true, cleanupQueued: true };
 }
 
 export async function setAlbumCoverAction(
@@ -286,24 +287,23 @@ export async function setAlbumCoverAction(
   const albumId = albumIdResult.data;
   const photoId = photoIdResult.data;
   const user = await requireDbUser();
-  const photo = await prisma.photo.findFirst({
-    where: {
-      id: photoId,
-      albumId,
-      album: { ownerId: user.id },
-      mimeType: { startsWith: "image/" },
-    },
-    select: { album: { select: { shareSlug: true } } },
-  });
-  if (!photo) return { error: "Photo not found or unauthorized" };
+  if (!(await albumImageCoverExists(prisma, albumId, user.id, photoId))) {
+    return { error: "Photo not found or unauthorized" };
+  }
 
-  await prisma.album.updateMany({
+  const updated = await prisma.album.updateMany({
     where: { id: albumId, ownerId: user.id },
     data: { coverPhotoId: photoId },
   });
+  if (updated.count !== 1) return { error: "Album not found or unauthorized" };
+  const album = await prisma.album.findUnique({
+    where: { id: albumId },
+    select: { shareSlug: true },
+  });
+  if (!album) return { error: "Album not found or unauthorized" };
   revalidatePath(`/dashboard/albums/${albumId}`);
   revalidatePath("/dashboard");
-  revalidatePath(`/a/${photo.album.shareSlug}`);
+  revalidatePath(`/a/${album.shareSlug}`);
   return { success: true };
 }
 

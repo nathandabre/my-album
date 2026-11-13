@@ -1,19 +1,13 @@
 import "server-only";
 
-import { createHmac } from "node:crypto";
-
 import { prisma } from "@/lib/db";
+import { getAlbumPasswordAttemptKey } from "@/lib/password-attempt-key";
 
 const WINDOW_MILLISECONDS = 15 * 60 * 1000;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MILLISECONDS = 15 * 60 * 1000;
 
-export function hashPasswordAttemptKey(address: string, secret: string) {
-  return createHmac("sha256", secret)
-    .update("my-album:password-attempt:v1:")
-    .update(address)
-    .digest("hex");
-}
+export { getAlbumPasswordAttemptKey };
 
 export async function isPasswordAttemptLocked(
   albumId: string,

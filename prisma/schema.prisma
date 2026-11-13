@@ -31,6 +31,7 @@ model User {
   updatedAt DateTime @updatedAt
 
   albums Album[]
+  uploadQuotas MediaUploadQuota[]
 }
 
 model Album {
@@ -156,4 +157,66 @@ model AlbumPasswordAttempt {
 
   @@unique([albumId, clientKey])
   @@index([lockedUntil])
+}
+
+model MediaUploadQuota {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  day       DateTime @db.Date
+  fileCount Int      @default(0)
+  bytes     BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, day])
+}
+
+enum MediaCleanupStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum MediaPrivacyMigrationStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum MediaPrivacyMigrationSource {
+  PHOTO
+  ALBUM_ASSET
+}
+
+model MediaPrivacyMigration {
+  id            String                       @id @default(cuid())
+  sourceFileId  String                       @unique
+  sourceRecordId String
+  albumId       String
+  source        MediaPrivacyMigrationSource
+  targetFileId  String?                      @unique
+  status        MediaPrivacyMigrationStatus  @default(PENDING)
+  attempts      Int                          @default(0)
+  lastError     String?
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+
+  @@index([status, updatedAt])
+}
+
+model MediaCleanupJob {
+  id            String             @id @default(cuid())
+  albumId       String
+  imagekitFileId String            @unique
+  status        MediaCleanupStatus @default(PENDING)
+  attempts      Int                @default(0)
+  nextAttemptAt DateTime           @default(now())
+  processingAt  DateTime?
+  lastError     String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([status, nextAttemptAt])
 }

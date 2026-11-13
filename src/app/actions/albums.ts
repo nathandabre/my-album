@@ -1,21 +1,22 @@
 "use server";
 
 import crypto from "node:crypto";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { requireDbUser } from "@/lib/auth";
+import { albumImageCoverExists } from "@/lib/album-validation";
 import { prisma } from "@/lib/db";
 import { AlbumVisibility } from "@/generated/prisma/enums";
 import { hashAlbumPassword, verifyAlbumPassword } from "@/lib/album-password";
 import {
   clearPasswordAttempts,
-  hashPasswordAttemptKey,
+  getAlbumPasswordAttemptKey,
   isPasswordAttemptLocked,
   recordFailedPasswordAttempt,
 } from "@/lib/album-password-rate-limit";
-import { deleteImageKitFileFromAlbum } from "@/lib/imagekit-server";
+import { enqueueMediaCleanup } from "@/lib/media-cleanup";
 import {
   albumAccessCookieName,
   createAlbumAccessToken,
@@ -186,12 +187,15 @@ export async function updateAlbumAction(
 
   if (input.coverPhotoId !== undefined) {
     if (input.coverPhotoId !== null) {
-      const coverPhoto = await prisma.photo.findFirst({
-        where: { id: input.coverPhotoId, albumId },
-        select: { id: true },
-      });
-      if (!coverPhoto) {
-        return { error: "Cover photo must belong to this album" };
+      if (
+        !(await albumImageCoverExists(
+          prisma,
+          albumId,
+          user.id,
+          input.coverPhotoId,
+        ))
+      ) {
+        return { error: "Cover photo must be an image in this album" };
       }
     }
     updateData.coverPhotoId = input.coverPhotoId;
@@ -236,11 +240,15 @@ export async function deleteAlbumAction(rawAlbumId: unknown) {
         },
       });
       if (!album) return null;
-      await tx.album.delete({ where: { id: album.id } });
-      return [
+      const fileIds = [
         ...album.photos.map((photo) => photo.imagekitFileId),
         ...album.assets.map((asset) => asset.imagekitFileId),
       ];
+      for (const fileId of fileIds) {
+        await enqueueMediaCleanup(tx, album.id, fileId);
+      }
+      await tx.album.delete({ where: { id: album.id } });
+      return album.id;
     },
     { isolationLevel: "Serializable" },
   );
@@ -248,21 +256,8 @@ export async function deleteAlbumAction(rawAlbumId: unknown) {
     return { error: "Album not found or unauthorized" };
   }
 
-  const cleanupResults = await Promise.allSettled(
-    deletedAlbum.map((fileId) => deleteImageKitFileFromAlbum(albumId, fileId)),
-  );
-  const cleanupPending = cleanupResults.filter(
-    (result) => result.status === "rejected",
-  ).length;
-  if (cleanupPending > 0) {
-    console.error("Deleted album media cleanup failed", {
-      albumId,
-      cleanupPending,
-    });
-  }
-
   revalidatePath("/dashboard");
-  return { success: true, cleanupPending };
+  return { success: true, cleanupQueued: true };
 }
 
 export async function verifyAlbumPasswordAction(
@@ -296,12 +291,7 @@ export async function verifyAlbumPasswordAction(
 
   const secret = process.env.CLERK_SECRET_KEY;
   if (!secret) throw new Error("CLERK_SECRET_KEY is not configured");
-  const requestHeaders = await headers();
-  const address =
-    requestHeaders.get("x-real-ip") ??
-    requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    "unknown";
-  const clientKey = hashPasswordAttemptKey(address, secret);
+  const clientKey = getAlbumPasswordAttemptKey(album.id, secret);
   if (await isPasswordAttemptLocked(album.id, clientKey)) {
     return { error: "Unable to unlock this album. Check the password and try again." };
   }

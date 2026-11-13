@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
+import { z } from "zod";
 import {
   Heart,
   Download,
@@ -19,6 +20,23 @@ import {
   togglePhotoFavoriteAction,
   getGuestFavoritesAction,
 } from "@/app/actions/photos";
+import {
+  appendUniquePhotos,
+} from "@/lib/gallery-pagination";
+
+const galleryPageSchema = z.object({
+  photos: z.array(
+    z.object({
+      id: z.string(),
+      caption: z.string().nullable(),
+      width: z.number(),
+      height: z.number(),
+      sizeBytes: z.number(),
+      mimeType: z.string(),
+    }),
+  ),
+  nextCursor: z.string().nullable(),
+});
 
 type PhotoData = {
   id: string;
@@ -46,37 +64,76 @@ export type PublicGalleryProps = {
     } | null;
     owner: OwnerData;
     photos: PhotoData[];
+    photoCount: number;
+    nextCursor: string | null;
   };
 };
 
 export function PublicGallery({ album }: { album: PublicGalleryProps["album"] }) {
+  const resetKey = JSON.stringify([album.id, album.photos, album.nextCursor]);
+  return <PublicGalleryContent key={resetKey} album={album} />;
+}
+
+function PublicGalleryContent({
+  album,
+}: {
+  album: PublicGalleryProps["album"];
+}) {
+  const [photos, setPhotos] = useState(album.photos);
+  const [nextCursor, setNextCursor] = useState(album.nextCursor);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [activeFilter, setActiveFilter] = useState<"all" | "favorites">("all");
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
 
-  // The server owns the anonymous session identity in an HTTP-only cookie.
   useEffect(() => {
-    const ids = album.photos.map((p) => p.id);
+    const ids = photos.map((photo) => photo.id);
 
     Promise.resolve().then(async () => {
       if (ids.length > 0) {
         try {
           const favs = await getGuestFavoritesAction(ids);
-          setFavoriteIds(new Set(favs));
+          setFavoriteIds((current) => new Set([...current, ...favs]));
         } catch {
           setFavoriteError("Your favorites could not be loaded. Please try again.");
         }
       }
     });
-  }, [album.photos]);
+  }, [photos]);
 
 
   const displayedPhotos =
     activeFilter === "favorites"
-      ? album.photos.filter((p) => favoriteIds.has(p.id))
-      : album.photos;
+      ? photos.filter((photo) => favoriteIds.has(photo.id))
+      : photos;
+
+  async function handleLoadMore() {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    setLoadError(null);
+    try {
+      const response = await fetch(
+        `/api/albums/${encodeURIComponent(album.shareSlug)}/photos?cursor=${encodeURIComponent(nextCursor)}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) throw new Error("Unable to load more photos.");
+      const parsed = galleryPageSchema.safeParse(await response.json());
+      if (!parsed.success) throw new Error("Gallery response is invalid.");
+      setPhotos((current) =>
+        appendUniquePhotos(current, parsed.data.photos),
+      );
+      setNextCursor(parsed.data.nextCursor);
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : "Unable to load more photos.",
+      );
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
 
   async function handleToggleFavorite(photoId: string, e?: React.MouseEvent) {
     e?.stopPropagation();
@@ -236,7 +293,7 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                All Media ({album.photos.length})
+                All Media ({album.photoCount})
               </button>
               <button
                 onClick={() => setActiveFilter("favorites")}
@@ -398,6 +455,23 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
             })}
           </div>
         )}
+        {nextCursor ? (
+          <div className="mt-8 flex flex-col items-center gap-3">
+            {loadError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {loadError}
+              </p>
+            ) : null}
+            <Button
+              variant="outline"
+              onClick={handleLoadMore}
+              disabled={isLoadingMore}
+              aria-busy={isLoadingMore}
+            >
+              {isLoadingMore ? "Loading…" : `Load more photos (${Math.max(0, album.photoCount - photos.length)} remaining)`}
+            </Button>
+          </div>
+        ) : null}
       </main>
 
       {/* Full-screen Lightbox Modal */}
