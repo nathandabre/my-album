@@ -16,7 +16,7 @@ export function CreateAlbumDialog() {
     AlbumVisibility.UNLISTED,
   );
   const [password, setPassword] = useState("");
-  const [allowDownload, setAllowDownload] = useState(false);
+  const [allowDownload, setAllowDownload] = useState(true);
   const [expiresAt, setExpiresAt] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export function CreateAlbumDialog() {
       setTitle("");
       setDescription("");
       setPassword("");
-      setAllowDownload(false);
+      setAllowDownload(true);
       setExpiresAt("");
 
       if (res.albumId) {
@@ -215,7 +215,7 @@ export function CreateAlbumDialog() {
                   htmlFor="allowDownload"
                   className="text-sm text-foreground cursor-pointer select-none"
                 >
-                  Allow clients to download high-resolution photos
+                  Allow clients to download images and videos
                 </label>
               </div>
 

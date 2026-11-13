@@ -16,6 +16,11 @@ enum AlbumVisibility {
   PASSWORD
 }
 
+enum AlbumAssetType {
+  IMAGE
+  VIDEO
+}
+
 model User {
   id        String   @id @default(cuid())
   clerkId   String   @unique
@@ -45,12 +50,56 @@ model Album {
   allowDownload Boolean         @default(false)
   expiresAt     DateTime?
 
-  photos Photo[] @relation("AlbumPhotos")
+  photos Photo[]      @relation("AlbumPhotos")
+  pages  AlbumPage[]
+  assets AlbumAsset[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([ownerId, createdAt])
+}
+
+model AlbumPage {
+  id      String @id @default(cuid())
+  albumId String
+  album   Album  @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  title       String?
+  sortOrder   Int       @default(0)
+  width       Int       @default(1200)
+  height      Int       @default(1600)
+  designJson  Json
+  publishedAt DateTime?
+
+  renderedAsset AlbumAsset? @relation("PageRender")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([albumId, sortOrder])
+}
+
+model AlbumAsset {
+  id      String @id @default(cuid())
+  albumId String
+  album   Album  @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  imagekitFileId String         @unique
+  filePath       String
+  fileName       String
+  mimeType       String
+  type           AlbumAssetType
+  width          Int            @default(0)
+  height         Int            @default(0)
+  sizeBytes      Int
+
+  renderedPageId String?    @unique
+  renderedPage   AlbumPage? @relation("PageRender", fields: [renderedPageId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([albumId, createdAt])
 }
 
 model Photo {

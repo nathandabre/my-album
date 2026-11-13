@@ -20,7 +20,7 @@ export async function getImageKitUploadAuth(): Promise<ImageKitAuthParams> {
   return response.json();
 }
 
-export async function uploadImageToImageKit(
+export async function uploadMediaToImageKit(
   file: File,
   options?: {
     folder?: string;
@@ -50,6 +50,17 @@ export async function uploadImageToImageKit(
   });
 }
 
+export async function uploadImageToImageKit(
+  file: File,
+  options?: {
+    folder?: string;
+    tags?: string[];
+    onProgress?: (progress: number) => void;
+  },
+): Promise<UploadResponse> {
+  return uploadMediaToImageKit(file, options);
+}
+
 export function getImageKitUrl(filePath: string, transformations?: string): string {
   if (!filePath) return "";
   if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
@@ -62,4 +73,3 @@ export function getImageKitUrl(filePath: string, transformations?: string): stri
   }
   return `${endpoint}${normalizedPath}`;
 }
-

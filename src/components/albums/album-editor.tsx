@@ -76,6 +76,20 @@ type AlbumDetail = {
   photos: PhotoItem[];
 };
 
+const MAX_PHOTOS_PER_UPLOAD = 100;
+const MAX_IMAGE_BYTES = 200_000_000;
+const MAX_VIDEO_BYTES = 2_000_000_000;
+const ALLOWED_MEDIA_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+]);
+
 export function AlbumEditor({ album }: { album: AlbumDetail }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"photos" | "favorites" | "settings">("photos");
@@ -142,6 +156,27 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
 
+    if (files.length > MAX_PHOTOS_PER_UPLOAD) {
+      setUploadError(`Upload no more than ${MAX_PHOTOS_PER_UPLOAD} photos at a time.`);
+      e.target.value = "";
+      return;
+    }
+    const invalidFile = files.find(
+      (file) => {
+        const maxBytes = file.type.startsWith("video/")
+          ? MAX_VIDEO_BYTES
+          : MAX_IMAGE_BYTES;
+        return !ALLOWED_MEDIA_TYPES.has(file.type) || file.size <= 0 || file.size > maxBytes;
+      },
+    );
+    if (invalidFile) {
+      setUploadError(
+        `${invalidFile.name} is not a supported image/video or exceeds its size limit (200 MB per image, 2 GB per video).`,
+      );
+      e.target.value = "";
+      return;
+    }
+
     setIsUploading(true);
     setUploadError(null);
     setUploadProgress(0);
@@ -150,7 +185,8 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
 
     try {
       for (const [index, file] of files.entries()) {
-        setUploadStatusText(`Uploading ${index + 1} of ${files.length} photos…`);
+        const isVideo = file.type.startsWith("video/");
+        setUploadStatusText(`Uploading ${index + 1} of ${files.length} media files…`);
 
         const result = await uploadImageToImageKit(file, {
           folder: `/albums/${album.id}`,
@@ -162,18 +198,22 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
           },
         });
 
+        if (!result.fileId || !result.filePath) {
+          throw new Error(`ImageKit did not return valid metadata for ${file.name}.`);
+        }
+
         uploadedPayloads.push({
-          imagekitFileId: result.fileId ?? `file_${Date.now()}_${index}`,
-          filePath: result.filePath ?? file.name,
+          imagekitFileId: result.fileId,
+          filePath: result.filePath,
           caption: file.name.replace(/\.[^/.]+$/, ""),
-          width: result.width || 1920,
-          height: result.height || 1080,
-          sizeBytes: result.size || file.size,
-          mimeType: file.type || "image/jpeg",
+          width: result.width && result.width > 0 ? result.width : isVideo ? 0 : 1920,
+          height: result.height && result.height > 0 ? result.height : isVideo ? 0 : 1080,
+          sizeBytes: result.size ?? file.size,
+          mimeType: file.type,
         });
       }
 
-      setUploadStatusText("Saving photos to album…");
+      setUploadStatusText("Saving media to album…");
       const addRes = await addPhotosToAlbumAction(album.id, uploadedPayloads);
 
       if (addRes.error) {
@@ -324,7 +364,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
           }`}
         >
           <ImageIcon className="h-4 w-4" />
-          <span>Photos ({album.photos.length})</span>
+          <span>Media ({album.photos.length})</span>
         </button>
 
         <button
@@ -359,7 +399,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
           <div className="relative rounded-2xl border-2 border-dashed border-border bg-card/40 p-8 text-center transition-all hover:bg-card/70 hover:border-primary/50">
             <input
               type="file"
-              accept="image/*"
+              accept="image/avif,image/gif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
               multiple
               disabled={isUploading}
               onChange={handleFilesUpload}
@@ -370,10 +410,10 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                 <UploadCloud className="h-8 w-8" />
               </div>
               <h3 className="text-base font-semibold text-foreground">
-                {isUploading ? uploadStatusText : "Click or drag & drop photos here"}
+                {isUploading ? uploadStatusText : "Click or drag & drop photos and videos here"}
               </h3>
               <p className="mt-1 text-xs text-muted-foreground">
-                Supports JPG, PNG, WEBP. Uploads directly to ImageKit CDN with automated optimization.
+                Supports JPG, PNG, WEBP, MP4, MOV, and WEBM. Videos up to 2 GB.
               </p>
 
               {isUploading && (
@@ -459,14 +499,18 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
           {album.photos.length === 0 ? (
             <div className="text-center py-12 border rounded-2xl border-border bg-card/20">
               <p className="text-sm text-muted-foreground">
-                No photos in this album yet. Upload photos above to build your gallery.
+                No media in this album yet. Upload images or videos above to build your gallery.
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {album.photos.map((photo) => {
+                const isVideo = photo.mimeType.startsWith("video/");
                 const isCover = album.coverPhotoId === photo.id;
-                const thumbnailUrl = getImageKitUrl(photo.filePath, "w-600,h-450,fo-auto,q-80");
+                const thumbnailUrl = getImageKitUrl(
+                  photo.filePath,
+                  isVideo ? undefined : "w-600,h-450,fo-auto,q-80",
+                );
                 const favCount = photo.favorites?.length || 0;
 
                 return (
@@ -475,13 +519,25 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                     className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
                   >
                     <div className="relative aspect-[4/3] w-full bg-muted">
-                      <Image
-                        src={thumbnailUrl}
-                        alt={photo.caption || "Photo"}
-                        fill
-                        sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                        className="object-cover"
-                      />
+                      {isVideo ? (
+                        <video
+                          src={thumbnailUrl}
+                          aria-label={photo.caption || "Album video"}
+                          controls
+                          muted
+                          playsInline
+                          preload="metadata"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <Image
+                          src={thumbnailUrl}
+                          alt={photo.caption || "Photo"}
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                          className="object-cover"
+                        />
+                      )}
 
                       {/* Top Badges */}
                       <div className="absolute top-2 left-2 flex flex-col gap-1">
@@ -500,14 +556,14 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                       </div>
 
                       {/* Overlay action bar on hover */}
-                      <div className="absolute inset-0 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center gap-2 p-2">
-                        {!isCover && (
+                      <div className={`absolute inset-0 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center gap-2 p-2 ${isVideo ? "pointer-events-none" : ""}`}>
+                        {!isCover && !isVideo && (
                           <Button
                             size="sm"
                             variant="secondary"
                             onClick={() => handleSetCover(photo.id)}
                             disabled={settingCoverId === photo.id}
-                            className="text-xs h-7 px-2 bg-white/90 text-black hover:bg-white"
+                            className="pointer-events-auto text-xs h-7 px-2 bg-white/90 text-black hover:bg-white"
                             title="Set as album cover photo"
                           >
                             <Star className="h-3 w-3 mr-1" />
@@ -522,7 +578,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                             setEditingCaptionPhotoId(photo.id);
                             setCaptionText(photo.caption || "");
                           }}
-                          className="text-xs h-7 px-2 bg-white/90 text-black hover:bg-white"
+                          className="pointer-events-auto text-xs h-7 px-2 bg-white/90 text-black hover:bg-white"
                           title="Edit caption"
                         >
                           <Pencil className="h-3 w-3" />
@@ -533,7 +589,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                           variant="destructive"
                           onClick={() => handleDeletePhoto(photo.id)}
                           disabled={deletingPhotoId === photo.id}
-                          className="text-xs h-7 px-2"
+                          className="pointer-events-auto text-xs h-7 px-2"
                           title="Delete photo"
                         >
                           <Trash2 className="h-3 w-3" />
@@ -615,9 +671,9 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
             {totalFavorites === 0 ? (
               <div className="text-center py-12 border rounded-2xl border-dashed border-border mt-6">
                 <Heart className="h-10 w-10 text-muted-foreground/40 mx-auto mb-2" />
-                <p className="text-sm font-medium text-foreground">No photos favorited yet</p>
+                <p className="text-sm font-medium text-foreground">No media favorited yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Once your clients view the gallery link and click the heart icon on photos, they will appear here.
+                  Favorites from photos and videos in the shared gallery will appear here.
                 </p>
               </div>
             ) : (
@@ -630,12 +686,25 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                       className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm"
                     >
                       <div className="relative aspect-[4/3] w-full bg-muted">
-                        <Image
-                          src={getImageKitUrl(photo.filePath, "w-600,h-450,fo-auto,q-80")}
-                          alt={photo.caption || "Photo"}
-                          fill
-                          className="object-cover"
-                        />
+                        {photo.mimeType.startsWith("video/") ? (
+                          <video
+                            src={getImageKitUrl(photo.filePath)}
+                            aria-label={photo.caption || "Album video"}
+                            controls
+                            controlsList="nodownload"
+                            muted
+                            playsInline
+                            preload="metadata"
+                            className="h-full w-full bg-black object-cover"
+                          />
+                        ) : (
+                          <Image
+                            src={getImageKitUrl(photo.filePath, "w-600,h-450,fo-auto,q-80")}
+                            alt={photo.caption || "Photo"}
+                            fill
+                            className="object-cover"
+                          />
+                        )}
                         <div className="absolute top-2 right-2 flex items-center gap-1 rounded-full bg-rose-500 px-2 py-0.5 text-xs font-semibold text-white shadow-md">
                           <Heart className="h-3 w-3 fill-current" />
                           <span>{photo.favorites?.length}</span>
@@ -794,7 +863,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
                 htmlFor="editAllowDownload"
                 className="text-sm text-foreground cursor-pointer select-none"
               >
-                Allow clients to download high-resolution photos
+                Allow clients to download images and videos
               </label>
             </div>
 
@@ -818,7 +887,7 @@ export function AlbumEditor({ album }: { album: AlbumDetail }) {
               Danger Zone
             </h3>
             <p className="text-sm text-muted-foreground">
-              Permanently delete this album and remove all photo associations. This action cannot be undone.
+              Permanently delete this album and remove all associated media. This action cannot be undone.
             </p>
             <Button
               variant="destructive"

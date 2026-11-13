@@ -72,7 +72,7 @@ export async function createAlbumAction(input: CreateAlbumInput) {
       shareSlug,
       visibility,
       passwordHash,
-      allowDownload: input.allowDownload ?? false,
+      allowDownload: input.allowDownload ?? true,
       expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
     },
   });
@@ -143,6 +143,15 @@ export async function updateAlbumAction(
   }
 
   if (input.coverPhotoId !== undefined) {
+    if (input.coverPhotoId !== null) {
+      const coverPhoto = await prisma.photo.findFirst({
+        where: { id: input.coverPhotoId, albumId },
+        select: { id: true },
+      });
+      if (!coverPhoto) {
+        return { error: "Cover photo must belong to this album" };
+      }
+    }
     updateData.coverPhotoId = input.coverPhotoId;
   }
 

@@ -38,6 +38,8 @@ npm run db:generate
 npm run db:push
 ```
 
+The database schema stores album media and cover-photo selections.
+
 4. Start the app:
 
 ```bash
@@ -63,9 +65,12 @@ Open [http://localhost:3000](http://localhost:3000).
 | --- | --- |
 | `/` | Landing |
 | `/sign-in`, `/sign-up` | Clerk auth |
-| `/dashboard` | Photographer album dashboard (stub) |
-| `/a/[shareSlug]` | Public shared album (stub) |
+| `/dashboard` | Photographer album dashboard |
+| `/a/[shareSlug]` | Public shared gallery with downloadable images and playable videos |
 | `/api/upload-auth` | ImageKit upload auth (signed-in only) |
+
+Photographers can upload images and videos directly into an album. Clients can
+view, play, favorite, and download the shared media when downloads are enabled.
 
 ## Deploy (Vercel)
 

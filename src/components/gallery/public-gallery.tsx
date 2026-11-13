@@ -109,23 +109,22 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
     }
   }
 
-  function downloadPhoto(photo: PhotoData, e?: React.MouseEvent) {
-    e?.stopPropagation();
-    const url = getImageKitUrl(photo.filePath);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = photo.caption || `photo-${photo.id}.jpg`;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  function getPhotoDownloadUrl(photo: PhotoData) {
+    return `/api/albums/${encodeURIComponent(album.shareSlug)}/downloads/${encodeURIComponent(photo.id)}`;
   }
 
   // Lightbox keyboard navigation
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (lightboxIndex === null) return;
+      if (
+        e.target instanceof HTMLVideoElement ||
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
+      ) {
+        return;
+      }
       if (e.key === "Escape") setLightboxIndex(null);
       if (e.key === "ArrowLeft") {
         setLightboxIndex((prev) =>
@@ -212,7 +211,7 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                All Photos ({album.photos.length})
+                All Media ({album.photos.length})
               </button>
               <button
                 onClick={() => setActiveFilter("favorites")}
@@ -278,7 +277,7 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
-                No photos in this album yet.
+                No images or videos in this album yet.
               </p>
             )}
           </div>
@@ -286,7 +285,11 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
           <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4 space-y-4">
             {displayedPhotos.map((photo, index) => {
               const isFav = favoriteIds.has(photo.id);
-              const previewUrl = getImageKitUrl(photo.filePath, "w-800,q-80");
+              const isVideo = photo.mimeType.startsWith("video/");
+              const previewUrl = getImageKitUrl(
+                photo.filePath,
+                isVideo ? undefined : "w-800,q-80",
+              );
 
               return (
                 <div
@@ -294,23 +297,49 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
                   onClick={() => setLightboxIndex(index)}
                   className="group relative cursor-pointer break-inside-avoid overflow-hidden rounded-2xl border border-border/80 bg-muted/40 shadow-sm transition-all duration-300 hover:shadow-xl hover:border-primary/50 hover:-translate-y-0.5"
                 >
-                  <Image
-                    src={previewUrl}
-                    alt={photo.caption || "Album photo"}
-                    width={photo.width}
-                    height={photo.height}
-                    sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, (max-width: 1280px) 33vw, 25vw"
-                    className="h-auto w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
-                    loading="lazy"
-                  />
+                  {isVideo ? (
+                    <video
+                      src={previewUrl}
+                      aria-label={photo.caption || "Album video"}
+                      controls
+                      controlsList="nodownload"
+                      playsInline
+                      preload="metadata"
+                      onClick={(event) => event.stopPropagation()}
+                      className="h-auto w-full bg-black"
+                    />
+                  ) : (
+                    <Image
+                      src={previewUrl}
+                      alt={photo.caption || "Album photo"}
+                      width={photo.width}
+                      height={photo.height}
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, (max-width: 1280px) 33vw, 25vw"
+                      className="h-auto w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
+                      loading="lazy"
+                    />
+                  )}
+
+                  {album.allowDownload ? (
+                    <a
+                      href={getPhotoDownloadUrl(photo)}
+                      download
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label={`Download ${photo.caption || "photo"}`}
+                      className="absolute right-3 top-3 z-10 inline-flex h-9 items-center gap-1.5 rounded-full bg-background/90 px-3 text-xs font-semibold text-foreground opacity-100 shadow-sm backdrop-blur transition-opacity hover:bg-background sm:pointer-events-none sm:opacity-0 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100"
+                    >
+                      <Download className="h-4 w-4" />
+                      <span>Download</span>
+                    </a>
+                  ) : null}
 
                   {/* Gradient Overlay & Controls on Hover */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30 opacity-0 transition-opacity duration-200 group-hover:opacity-100 flex flex-col justify-between p-3.5">
+                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30 opacity-0 transition-opacity duration-200 group-hover:opacity-100 flex flex-col justify-between p-3.5">
                     {/* Top actions */}
                     <div className="flex items-center justify-between">
                       <button
                         onClick={(e) => handleToggleFavorite(photo.id, e)}
-                        className={`flex h-9 w-9 items-center justify-center rounded-full backdrop-blur-md transition-transform active:scale-90 ${
+                        className={`pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full backdrop-blur-md transition-transform active:scale-90 ${
                           isFav
                             ? "bg-rose-500 text-white"
                             : "bg-black/50 text-white hover:bg-black/75"
@@ -322,15 +351,6 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
                         />
                       </button>
 
-                      {album.allowDownload && (
-                        <button
-                          onClick={(e) => downloadPhoto(photo, e)}
-                          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-md hover:bg-black/75 transition-transform active:scale-90"
-                          title="Download photo"
-                        >
-                          <Download className="h-4 w-4" />
-                        </button>
-                      )}
                     </div>
 
                     {/* Bottom caption / dimensions */}
@@ -340,9 +360,11 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
                           {photo.caption}
                         </p>
                       )}
-                      <p className="text-[11px] text-white/80 drop-shadow-md">
-                        {photo.width} × {photo.height}
-                      </p>
+                      {photo.width > 0 && photo.height > 0 ? (
+                        <p className="text-[11px] text-white/80 drop-shadow-md">
+                          {photo.width} × {photo.height}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -392,13 +414,16 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
               </button>
 
               {album.allowDownload && (
-                <button
-                  onClick={(e) => downloadPhoto(activePhoto, e)}
+                <a
+                  href={getPhotoDownloadUrl(activePhoto)}
+                  download
+                  onClick={(event) => event.stopPropagation()}
+                  aria-label="Download photo"
                   className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-transform active:scale-90"
                   title="Download"
                 >
                   <Download className="h-5 w-5" />
-                </button>
+                </a>
               )}
 
               <button
@@ -432,14 +457,25 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
             onClick={(e) => e.stopPropagation()}
             className="relative flex h-full max-h-[85vh] w-full max-w-[90vw] items-center justify-center p-4"
           >
-            <Image
-              src={getImageKitUrl(activePhoto.filePath, "w-2000,q-90")}
-              alt={activePhoto.caption || "Enlarged photo"}
-              width={activePhoto.width}
-              height={activePhoto.height}
-              className="max-h-full max-w-full rounded-lg object-contain shadow-2xl animate-in zoom-in-95 duration-150"
-              priority
-            />
+            {activePhoto.mimeType.startsWith("video/") ? (
+              <video
+                src={getImageKitUrl(activePhoto.filePath)}
+                aria-label={activePhoto.caption || "Album video"}
+                controls
+                controlsList="nodownload"
+                playsInline
+                className="max-h-full max-w-full rounded-lg bg-black object-contain shadow-2xl"
+              />
+            ) : (
+              <Image
+                src={getImageKitUrl(activePhoto.filePath, "w-2000,q-90")}
+                alt={activePhoto.caption || "Enlarged photo"}
+                width={activePhoto.width}
+                height={activePhoto.height}
+                className="max-h-full max-w-full rounded-lg object-contain shadow-2xl animate-in zoom-in-95 duration-150"
+                priority
+              />
+            )}
           </div>
 
           {/* Right Arrow */}
@@ -469,7 +505,9 @@ export function PublicGallery({ album }: { album: PublicGalleryProps["album"] })
               </p>
             ) : null}
             <span>
-              {activePhoto.width} × {activePhoto.height} px
+              {activePhoto.width > 0 && activePhoto.height > 0
+                ? `${activePhoto.width} × ${activePhoto.height} px`
+                : activePhoto.mimeType}
             </span>
           </div>
         </div>
