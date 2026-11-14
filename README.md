@@ -58,6 +58,9 @@ flowchart LR
   cleanup --> next
 ```
 
+The Content Security Policy is currently report-only while browser routes and
+Clerk/ImageKit integrations are validated; it is not yet enforced.
+
 ## Key engineering decisions
 
 - Album access cookies are HMAC-signed and bind the album ID and `updatedAt`
