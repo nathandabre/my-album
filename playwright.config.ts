@@ -17,3 +17,4 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
 });
+// testing the e2e flow of the application, including the frontend and backend integration.

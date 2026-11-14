@@ -1,3 +1,5 @@
+//It checks whether the data flow between different parts of your application works correctly — database, Prisma, API routes, and backend services.
+
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
