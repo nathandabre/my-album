@@ -1,12 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const allowedTestHosts = new Set(["localhost", "127.0.0.1", "::1", "postgres"]);
 const enabled = Boolean(databaseUrl);
 
+vi.mock("server-only", () => ({}));
+
 describe.skipIf(!enabled)("PostgreSQL integration safety and data integrity", () => {
   let prisma: typeof import("@/lib/db").prisma;
+  let recordFailedPasswordAttempt:
+    typeof import("@/lib/album-password-rate-limit").recordFailedPasswordAttempt;
   const createdUsers: string[] = [];
 
   beforeAll(async () => {
@@ -18,6 +30,9 @@ describe.skipIf(!enabled)("PostgreSQL integration safety and data integrity", ()
     }
     process.env.DATABASE_URL = databaseUrl;
     ({ prisma } = await import("@/lib/db"));
+    ({ recordFailedPasswordAttempt } = await import(
+      "@/lib/album-password-rate-limit"
+    ));
   });
 
   afterEach(async () => {
@@ -108,6 +123,23 @@ describe.skipIf(!enabled)("PostgreSQL integration safety and data integrity", ()
     await expect(
       prisma.album.findUniqueOrThrow({ where: { id: owner.album.id } }),
     ).resolves.toMatchObject({ title: "Integration album" });
+  });
+
+  it("atomically locks an album after concurrent password failures", async () => {
+    const { album } = await createFixture();
+    const clientKey = `integration-${randomUUID()}`;
+    await Promise.all(
+      Array.from({ length: 10 }, () =>
+        recordFailedPasswordAttempt(album.id, clientKey),
+      ),
+    );
+
+    const attempt = await prisma.albumPasswordAttempt.findUnique({
+      where: { albumId_clientKey: { albumId: album.id, clientKey } },
+    });
+    expect(attempt?.failedAttempts).toBeGreaterThanOrEqual(5);
+    expect(attempt?.lockedUntil).toBeInstanceOf(Date);
+    expect(attempt?.lockedUntil?.getTime()).toBeGreaterThan(Date.now());
   });
 
   it("switches media pointers and durably queues public originals atomically", async () => {

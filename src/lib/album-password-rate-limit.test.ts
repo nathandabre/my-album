@@ -7,51 +7,51 @@ const state = vi.hoisted(() => ({
     windowStartedAt: Date;
     lockedUntil: Date | null;
   },
+  rawCalls: [] as { query: string; values: unknown[] }[],
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/db", () => ({
   prisma: {
+    $executeRaw: vi.fn(async (
+      strings: TemplateStringsArray,
+      ...values: unknown[]
+    ) => {
+      state.rawCalls.push({ query: strings.join("?"), values });
+      const [id, albumId, clientKey, now] = values;
+      if (
+        typeof id !== "string" ||
+        typeof albumId !== "string" ||
+        typeof clientKey !== "string" ||
+        !(now instanceof Date)
+      ) {
+        throw new Error("Unexpected atomic password-attempt query parameters");
+      }
+
+      const previous = state.attempt;
+      const resetWindow =
+        !previous ||
+        now.getTime() - previous.windowStartedAt.getTime() >= 15 * 60 * 1000;
+      const failedAttempts = resetWindow
+        ? 1
+        : previous.failedAttempts + 1;
+      state.attempt = {
+        id: previous?.id ?? id,
+        failedAttempts,
+        windowStartedAt: resetWindow
+          ? now
+          : previous.windowStartedAt,
+        lockedUntil:
+          failedAttempts >= 5
+            ? new Date(now.getTime() + 15 * 60 * 1000)
+            : resetWindow
+              ? null
+              : previous.lockedUntil,
+      };
+      return 1;
+    }),
     albumPasswordAttempt: {
       findUnique: vi.fn(async () => state.attempt),
-      upsert: vi.fn(async ({ create, update }: {
-        create: {
-          failedAttempts: number;
-          windowStartedAt: Date;
-        };
-        update: {
-          failedAttempts?: number | { increment: number };
-          windowStartedAt?: Date;
-          lockedUntil?: null;
-        };
-      }) => {
-        if (!state.attempt) {
-          state.attempt = {
-            id: "attempt",
-            failedAttempts: create.failedAttempts,
-            windowStartedAt: create.windowStartedAt,
-            lockedUntil: null,
-          };
-        } else {
-          state.attempt = {
-            ...state.attempt,
-            failedAttempts:
-              typeof update.failedAttempts === "object"
-                ? state.attempt.failedAttempts + update.failedAttempts.increment
-                : update.failedAttempts ?? state.attempt.failedAttempts,
-            windowStartedAt:
-              update.windowStartedAt ?? state.attempt.windowStartedAt,
-            lockedUntil: update.lockedUntil ?? state.attempt.lockedUntil,
-          };
-        }
-        return {
-          id: state.attempt.id,
-          failedAttempts: state.attempt.failedAttempts,
-        };
-      }),
-      update: vi.fn(async ({ data }: { data: { lockedUntil: Date } }) => {
-        if (state.attempt) state.attempt.lockedUntil = data.lockedUntil;
-      }),
       deleteMany: vi.fn(async () => {
         state.attempt = null;
         return { count: 1 };
@@ -73,6 +73,7 @@ describe("album password attempt lockout", () => {
 
   beforeEach(() => {
     state.attempt = null;
+    state.rawCalls = [];
   });
 
   it("locks after repeated failures and expires the lock after fifteen minutes", async () => {
@@ -84,6 +85,11 @@ describe("album password attempt lockout", () => {
       );
     }
 
+    expect(state.rawCalls).toHaveLength(5);
+    expect(state.rawCalls[0]?.query).toContain(
+      'ON CONFLICT ("albumId", "clientKey") DO UPDATE',
+    );
+    expect(state.rawCalls[0]?.query).toContain('"failedAttempts" + 1');
     expect(await isPasswordAttemptLocked(
       albumId,
       clientKey,
