@@ -1,8 +1,13 @@
-# My Album technical audit
+# Security hardening log
 
-Audit scope: tracked application source, configuration, Prisma schema, upload and
-download flows, and the Next.js and Express entry points. The local `.env` was
-not read or included in this report.
+The findings below were recorded during the initial audit. The implementation
+status table reflects the current state verified on 2026-11-14.
+
+Audit scope: tracked Next.js application source, configuration, Prisma schema,
+upload, download and cleanup flows, migration history, and automated tests. The
+local `.env` was not read or included in this report.
+
+Last verified: 2026-11-14
 
 ## Findings
 
@@ -16,7 +21,7 @@ not read or included in this report.
 | A6 | High | `src/lib/imagekit.ts`, `src/components/gallery/public-gallery.tsx`, download route | Album media is delivered from permanent public ImageKit URLs, so hiding download buttons or restricting the download route cannot prevent retrieval once a browser is authorized to display it. Keep the current public-delivery limitation explicit; a true private-download model requires private storage and short-lived signed delivery URLs. Enforce `allowDownload` on the server regardless. | A2 |
 | A7 | High | `server/src/server.ts`, `server/src/controllers/*`, `server/src/routes/*`, `src/app/actions/*` | Express duplicates album/photo operations already used by Next.js Server Actions, with differing validation, defaults and authorization. No in-repository client references the Express routes. Consolidate on the Next.js application and remove the orphan server after confirming its package scripts and routes are not referenced by app code. | None |
 | A8 | High | `src/app/actions/albums.ts`, `src/app/actions/photos.ts` | Server Action inputs are TypeScript-only and are untrusted at runtime. Validate every boundary, including enum values, dates, lengths, IDs, list bounds and booleans. Keep database writes ownership-constrained and use transactions for coupled writes. | None |
-| A9 | Medium | `src/app/a/[shareSlug]/page.tsx`, `src/app/dashboard/page.tsx`, `src/app/dashboard/albums/[id]/page.tsx` | Gallery reads return all photos and related favorites without pagination. Large albums can consume excessive memory and slow SSR. Add bounded pagination or lazy loading as part of the gallery data-flow change. | A2 |
+| A9 | Medium | `src/app/a/[shareSlug]/page.tsx`, `src/app/api/albums/[album]/photos/route.ts`, `src/app/dashboard/albums/[id]/page.tsx` | The initial audit found unbounded gallery reads. Public gallery reads now use bounded cursor pagination, but the owner album editor still loads all photos and related favorites. Paginate that editor data flow to bound memory and SSR work for large albums. | A2 |
 | A10 | Medium | `prisma/schema.prisma` | Existing owner and album query indexes are limited; favorites are unique by `(photoId, guestId)`, but query access and deletion behavior should be reviewed against the live usage patterns. Preserve foreign keys and add only measured indexes through a safe migration. | A4 |
 | A11 | Medium | `src/app/actions/photos.ts`, `src/components/albums/album-editor.tsx` | Multi-step photo/cover operations are transactional in one action, but other mutations and the duplicated Express implementation differ. Use ownership-scoped operations and transactions consistently; delete external media only after database success, with retryable orphan cleanup. | A5, A7 |
 | A12 | Medium | `package.json`, project root | No automated test framework or tests are present. Add isolated tests for password/access decisions, authorization, input validation and upload metadata verification before claiming production readiness. | A2, A3, A5 |
@@ -50,23 +55,24 @@ not read or included in this report.
 | A6 | Partially fixed: new files are private and proxied through access checks using short-lived ImageKit signed URLs. Existing files are still public until explicitly converted/re-uploaded. |
 | A7 | Fixed by consolidating the application on Next.js and removing Express-only dependencies/routes. |
 | A8 | Improved with Zod validation at album, photo, favorite, password, and upload boundaries. |
-| A9 | Open: large albums are still fetched/rendered as one collection; pagination is a follow-up. |
+| A9 | Partially fixed: the public page renders a bounded first page and the public photos route serves cursor-paginated pages. The dashboard album editor still loads all photos and their favorites. |
 | A10 | Improved with a reverse favorites index and a persisted lockout table; no unrelated indexes were added. |
-| A11 | Improved with transactional photo/album DB deletion and best-effort ImageKit cleanup. Failed external cleanup is logged and surfaced for photo deletion; no retry worker is configured. |
-| A12 | Partially fixed: focused unit tests cover access policy, password hashing/legacy upgrade, media signatures, and signed URLs. No DB-backed integration or browser E2E suite exists yet. |
+| A11 | Fixed with a durable transactional cleanup queue and an authenticated worker. Failed deletions are retried with exponential backoff, stale processing leases are reclaimed, and jobs stop retrying after ten attempts. |
+| A12 | Partially fixed. Unit tests cover access/password policy, password hashing, attempt-key and lockout behavior, media validation/upload policy, signed URLs, pagination, upload and cleanup routes. PostgreSQL integration tests cover transaction rollback, favorite uniqueness and cascades, owner-scoped writes, and transactional media cleanup. Browser E2E tests cover landing, sign-in/sign-up rendering, and unauthenticated dashboard redirect; they do not cover authenticated album management or gallery/password flows. |
 | A13 | Improved with environment, migration, storage-privacy, and deployment documentation. |
 
 ## Audit limitations
 
 - The audit does not inspect `.env` values or connect to a configured production
   database, Clerk tenant, or ImageKit account.
-- No pre-existing migration history was present in `prisma/migrations`; live
-  database drift and existing album-password hash formats can only be verified
-  with a safely isolated database snapshot.
+- Three migration directories are present in `prisma/migrations`. Whether they
+  have been applied to a particular database was not verified; live database
+  drift and existing album-password hash formats require a safely isolated
+  database snapshot.
 - Existing ImageKit files remain directly retrievable if they were uploaded
   with public delivery. New uploads are private and access-checked through the
   application, but old files require conversion or re-upload to remove their
   public delivery paths.
-- The new migration was generated but not applied. Apply it only after confirming
-  the target database and Prisma migration history; it adds tables, columns and
-  an index without deleting existing data.
+- Migration deployment status was not verified against a database. Apply
+  pending migrations only after confirming the target database and its Prisma
+  migration history; the checked-in migrations are additive.
