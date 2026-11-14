@@ -1,7 +1,33 @@
 # My Album
 
-Digital photo albums for photographers: create an album, upload media, and
-share a link.
+My Album helps photographers organize albums and securely share photo galleries
+with clients.
+It is also a production-minded Next.js/Postgres project for practicing cloud
+deployment, migrations, containers, and CI/CD.
+
+[![CI](https://github.com/nathandabre/my-album/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nathandabre/my-album/actions/workflows/ci.yml)
+
+## Features
+
+- Public, unlisted, and password-protected albums with optional expiry.
+- Guest favorites and album-level download controls.
+- New private ImageKit uploads served through access checks and short-lived
+  signed URLs.
+- Per-user upload quotas and a durable media-cleanup worker with retries.
+
+**Live demo:** [Add the deployed URL](https://your-live-demo.example)
+
+## Screenshots
+
+Capture these pages and save them at the listed paths:
+
+| Page | Screenshot placeholder |
+| --- | --- |
+| Landing page | `docs/screenshots/landing.png` |
+| Dashboard | `docs/screenshots/dashboard.png` |
+| Album editor | `docs/screenshots/album-editor.png` |
+| Public gallery | `docs/screenshots/public-gallery.png` |
+| Password gate | `docs/screenshots/password-gate.png` |
 
 ## Architecture
 
@@ -22,6 +48,30 @@ share a link.
   HMAC derived from the server-only Clerk secret. Passwords use bcrypt.
 - The previous Express service duplicated app behavior and trusted
   `x-user-id`; it has been removed. No in-repository application code called it.
+
+```mermaid
+flowchart LR
+  browser[Browser] -->|Clerk-authenticated requests| next[Next.js: Clerk auth and Route Handlers]
+  next -->|Prisma 7| postgres[(PostgreSQL)]
+  next -->|private files and short-lived signed URLs| imagekit[ImageKit]
+  cron[Cron scheduler] -->|Bearer token| cleanup["/api/internal/media-cleanup"]
+  cleanup --> next
+```
+
+## Key engineering decisions
+
+- Album access cookies are HMAC-signed and bind the album ID and `updatedAt`
+  revision, so editing an album invalidates old tokens.
+- Password failures are stored per album/client key in PostgreSQL and trigger a
+  bounded lockout after five failures in a 15-minute window.
+- Upload folders, filenames, and private-file flags are chosen server-side;
+  uploaded content is checked by file signature rather than trusting its MIME
+  header.
+- Media deletions enter a durable PostgreSQL queue in the same transaction as
+  related record changes, then retry with backoff through an authenticated
+  worker.
+- Database changes use additive Prisma migrations; deployments apply them with
+  `prisma migrate deploy` rather than resetting or pushing schema state.
 
 ## Environment
 
@@ -62,39 +112,15 @@ client-supplied forwarded-IP headers.
    npm run db:generate
    ```
 
-4. Prepare the database:
+4. Apply committed migrations:
 
-   - For a **new, empty database**, apply all migrations:
+   ```bash
+   npm run db:migrate:deploy
+   ```
 
-     ```bash
-     npm run db:migrate:deploy
-     ```
-
-   - For a database that already contains My Album tables but has no Prisma
-     migration history, first verify it matches the pre-migration schema:
-
-     ```bash
-     npx prisma migrate diff --from-config-datasource --to-schema prisma/legacy-schema.prisma --exit-code
-     ```
-
-     Only if that command reports no differences, baseline the existing schema
-     and apply the additive migration:
-
-     ```bash
-     npx prisma migrate resolve --applied 0_init
-     npm run db:migrate:deploy
-     ```
-
-     If the diff reports changes or errors, stop and investigate before
-     baselining. Do not use `db push` or reset a database containing data.
-     For Neon, use a direct (non-pooled) connection for migration commands if
-     the pooler times out acquiring Prisma's advisory lock.
-
-   The follow-up migrations add password-attempt lockout storage, private-media
-   flags, upload quotas, retryable media cleanup, privacy-migration progress,
-   and a favorites query index; they do not delete existing media rows.
-   Existing media rows default to public delivery; use the migration guidance
-   below before treating those files as private.
+   For an existing database or migration-baselining guidance, see
+   [docs/operations.md](docs/operations.md). Never use `db push` or reset a
+   database containing data.
 5. Start the app:
 
    ```bash
@@ -120,6 +146,9 @@ client-supplied forwarded-IP headers.
 Do not use `db:push` for production deployments. Do not reset or recreate a
 production database.
 
+See [docs/operations.md](docs/operations.md) for existing-media migration and
+cleanup-worker operations.
+
 For browser smoke tests, install Chromium and explicitly target a disposable
 local or staging deployment:
 
@@ -135,47 +164,11 @@ unauthenticated dashboard redirect. Full Clerk account creation, media upload,
 sharing, password-gate, and download journeys still require a dedicated
 Clerk/ImageKit staging setup and are not represented as verified here.
 
-## Existing public ImageKit media migration
+## Operational guides
 
-The migration utility defaults to a dry run. It enumerates database media still
-marked public, verifies each source file with ImageKit, and reports what it
-would do without changing storage or records:
-
-```bash
-npm run media:migrate:dry-run
-```
-
-After backing up PostgreSQL and confirming the account is configured for private
-files and signed delivery, process a small batch explicitly:
-
-```bash
-npm run media:migrate:apply -- --limit=25 --batch-size=5
-```
-
-The utility records per-asset progress in `MediaPrivacyMigration`, creates a
-deterministically named private replacement inside the same album folder, and
-verifies its ImageKit file ID, path, and `isPrivateFile` status before changing
-the database pointer. Re-run the command to retry failed assets or continue in
-further batches. It does not delete an original inline. Replacing a public
-asset also queues the old file for the durable cleanup worker in the same
-transaction that switches the database pointer. The worker deletes it only
-after confirming the replacement is live and no database record still
-references the original. A structured JSON-line report is emitted; do not
-capture credentials in shell logs. The application does not run this migration
-automatically.
-
-Old public files remain available until the cleanup worker processes their
-queued jobs; previously distributed URLs or cached copies may remain accessible
-even after origin deletion. This utility does not purge CDN caches. Verify
-ImageKit's cache invalidation behavior and handle any required purge separately.
-
-## Cleanup worker
-
-Deleted photo/album files and failed orphan uploads are written to
-`MediaCleanupJob` transactionally. The worker claims a bounded batch, checks
-that a file is no longer referenced, validates its album folder in ImageKit,
-and retries with exponential backoff. After ten failures it marks a job
-`FAILED`.
+See [docs/operations.md](docs/operations.md) for safely baselining an existing
+database, migrating existing public ImageKit media, and scheduling/retrying the
+durable media-cleanup worker.
 
 Configure a scheduler to call `GET /api/internal/media-cleanup` periodically
 with `Authorization: Bearer <CRON_SECRET>`. Failed jobs can be retried by
@@ -196,9 +189,10 @@ settings. The worker does not need Redis or a separately running process.
    configured maximum request size and execution duration; some serverless
    platforms impose limits below the app's 2 GB video cap.
 4. Deploy using the lockfile, then run `npm run db:migrate:deploy` against the
-   intended database. This checked-in migration is additive. If the existing
-   database has not previously been managed by Prisma Migrate, verify/baseline
-   its migration history with a database administrator before deploying.
+   intended database. The checked-in migrations are additive. If the existing
+   database has not previously been managed by Prisma Migrate, see
+   [docs/operations.md](docs/operations.md) to verify/baseline its migration
+   history before deploying.
 5. Run `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
 6. Smoke-test sign-in, owner-only album editing, private/password/unlisted
    access, password lockout, private media display, and both allowed/denied
@@ -210,14 +204,6 @@ The password lockout threshold is five failures in 15 minutes followed by a
 when the album is updated. Guest-session cookies expire after 90 days. Cookies
 are HTTP-only, SameSite=Lax, and Secure in production.
 
-### Existing ImageKit files
-
-Files uploaded before this change may still be public at ImageKit even though
-the app now proxies access and does not send their ImageKit paths to gallery
-clients. Run the explicit public-media migration described above in small
-batches; never manually set `isPrivate` in PostgreSQL unless ImageKit confirms
-the corresponding file is private.
-
 ### Media download limitation
 
 `allowDownload` is enforced by the download Route Handler. A browser that can
@@ -226,7 +212,9 @@ does not provide DRM or absolute download prevention. New media is private at
 ImageKit and served through album authorization checks. Existing public
 ImageKit files remain retrievable by anyone who already knows their original
 URL until they are converted and the cleanup worker deletes the original;
-previously cached copies may remain accessible.
+previously cached copies may remain accessible. See
+[docs/operations.md](docs/operations.md) for the existing-media migration
+procedure.
 
 ## Routes
 
