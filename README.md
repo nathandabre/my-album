@@ -130,6 +130,23 @@ client-supplied forwarded-IP headers.
    npm run dev
    ```
 
+## Local Docker stack
+
+Copy `.env.example` to `.env`, set `POSTGRES_PASSWORD`, and point `DATABASE_URL`
+at the Compose service host `postgres` using the same database credentials.
+Fill in the Clerk and ImageKit values to exercise authenticated and media flows.
+Then run:
+
+```bash
+docker compose up --build
+```
+
+Compose starts PostgreSQL, applies pending migrations in a one-shot service,
+then starts the app at `http://localhost:3000`. Check
+`http://localhost:3000/api/health` for database readiness. The named database
+volume persists when containers stop; do not remove it unless you intentionally
+want to delete local data.
+
 ## Validation scripts
 
 | Script | Purpose |
@@ -227,6 +244,7 @@ procedure.
 | `/sign-in`, `/sign-up` | Clerk authentication |
 | `/dashboard` | Photographer album dashboard |
 | `/a/[shareSlug]` | Access-checked shared gallery |
+| `/api/health` | Unauthenticated database readiness check |
 | `/api/albums/[album]/upload` | Owner-authorized streaming upload proxy (`album` is the album ID) |
 | `/api/albums/[album]/photos` | Access-checked cursor-paginated gallery (`album` is the share slug) |
 | `/api/albums/[album]/media/[assetId]` | Access-checked, private media streaming (`album` is the share slug) |
