@@ -1,4 +1,4 @@
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 
 WORKDIR /app
 RUN apk add --no-cache libc6-compat
@@ -10,7 +10,7 @@ COPY prisma.config.ts ./prisma.config.ts
 ENV DATABASE_URL=postgresql://generate:generate@localhost:5432/generate
 RUN npm ci
 
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 
 WORKDIR /app
 RUN apk add --no-cache libc6-compat
@@ -21,7 +21,7 @@ ENV DATABASE_URL=postgresql://generate:generate@localhost:5432/generate
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npx prisma generate && npx next build
 
-FROM node:22-alpine AS runner
+FROM node:25-alpine AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
