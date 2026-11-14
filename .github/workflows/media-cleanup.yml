@@ -1,0 +1,34 @@
+name: Scheduled media cleanup
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - name: Invoke media cleanup
+        if: ${{ env.DEPLOY_URL != '' && env.CRON_SECRET != '' }}
+        run: |
+          case "$DEPLOY_URL" in
+            https://*) ;;
+            *)
+              echo "::error::DEPLOY_URL must be an HTTPS base URL"
+              exit 1
+              ;;
+          esac
+
+          curl --fail-with-body --silent --show-error --max-time 60 \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            "${DEPLOY_URL%/}/api/internal/media-cleanup"
+      - name: Skip when deployment secrets are not configured
+        if: ${{ env.DEPLOY_URL == '' || env.CRON_SECRET == '' }}
+        run: echo "Set DEPLOY_URL and CRON_SECRET to enable scheduled cleanup."

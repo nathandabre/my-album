@@ -198,6 +198,14 @@ settings. The worker does not need Redis or a separately running process.
 
 ## Deployment
 
+GitHub Actions runs checks, PostgreSQL integration tests, a Docker build, and
+the current Playwright smoke tests. On successful pushes to `main`, the image
+is published to GHCR with commit-SHA and `latest` tags. Configure repository
+Actions secrets `DEPLOY_URL` (HTTPS base URL) and `CRON_SECRET` to enable the
+15-minute cleanup workflow. The optional Cloud Run deploy step in
+`.github/workflows/deploy.yml` remains commented until its identity, image
+access, service, and runtime secrets are configured.
+
 1. Provision PostgreSQL and take a verified backup before the first migration.
 2. Configure the Clerk application for the production domain and add all Clerk
    and ImageKit variables from the table above to the deployment environment.
