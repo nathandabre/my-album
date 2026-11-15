@@ -35,7 +35,7 @@ export function CreateAlbumDialog() {
         title,
         description,
         visibility,
-        password,
+        password: password.trim() ? password : undefined,
         allowDownload,
         expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
       });

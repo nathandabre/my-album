@@ -24,17 +24,29 @@ import {
 } from "@/lib/album-token";
 
 const albumIdSchema = z.string().trim().min(1).max(128);
-const newPasswordSchema = z.string().min(8).max(128);
+const newPasswordSchema = z
+  .string()
+  .trim()
+  .min(8, "Password must be at least 8 characters.")
+  .max(128, "Password must be 128 characters or fewer.");
+
+const optionalPasswordSchema = z
+  .preprocess(
+    (val) => (typeof val === "string" ? val.trim() : val),
+    z.union([z.literal(""), newPasswordSchema]).optional().nullable(),
+  )
+  .transform((val) => (val && val.length > 0 ? val : undefined));
+
 const dateSchema = z
   .string()
   .datetime({ offset: true })
   .nullable()
   .optional();
 const albumFields = {
-  title: z.string().trim().min(1).max(120),
+  title: z.string().trim().min(1, "Title is required.").max(120),
   description: z.string().max(5000).optional(),
   visibility: z.nativeEnum(AlbumVisibility).optional(),
-  password: newPasswordSchema.optional(),
+  password: optionalPasswordSchema,
   allowDownload: z.boolean().optional(),
   expiresAt: dateSchema,
 };
