@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { Prisma } from "@/generated/prisma/client";
 
 import { getAlbumAccessDecision } from "@/lib/album-access";
 import { albumImageCoverExists } from "@/lib/album-validation";
@@ -260,11 +261,6 @@ export async function deletePhotoAction(
         data: { coverPhotoId: nextPhoto?.id ?? null },
       });
     }
-    const photo = await tx.photo.findFirst({
-      where: { id: photoId, albumId },
-      select: { imagekitFileId: true },
-    });
-    if (!photo) return;
     await enqueueMediaCleanup(tx, albumId, photo.imagekitFileId);
     await tx.photo.delete({ where: { id: photoId, albumId } });
   });
@@ -360,18 +356,33 @@ export async function togglePhotoFavoriteAction(
     where: { photoId_guestId: uniqueKey },
     select: { id: true },
   });
-  if (existing) {
-    await prisma.albumFavorite.delete({ where: { id: existing.id } });
-    return { success: true, isFavorited: false };
-  }
+  try {
+    if (existing) {
+      await prisma.albumFavorite.delete({ where: { id: existing.id } });
+      return { success: true, isFavorited: false };
+    }
 
-  await prisma.albumFavorite.create({
-    data: {
-      ...uniqueKey,
-      guestName: guestNameResult.data?.trim() || null,
-    },
-  });
-  return { success: true, isFavorited: true };
+    await prisma.albumFavorite.create({
+      data: {
+        ...uniqueKey,
+        guestName: guestNameResult.data?.trim() || null,
+      },
+    });
+    return { success: true, isFavorited: true };
+  } catch (error) {
+    // A concurrent toggle may have created or deleted the favorite first.
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2002" || error.code === "P2025")
+    ) {
+      const current = await prisma.albumFavorite.findUnique({
+        where: { photoId_guestId: uniqueKey },
+        select: { id: true },
+      });
+      return { success: true, isFavorited: Boolean(current) };
+    }
+    throw error;
+  }
 }
 
 export async function getGuestFavoritesAction(rawPhotoIds: unknown) {

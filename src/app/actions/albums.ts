@@ -8,6 +8,7 @@ import { z } from "zod";
 import { requireDbUser } from "@/lib/auth";
 import { albumImageCoverExists } from "@/lib/album-validation";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { AlbumVisibility } from "@/generated/prisma/enums";
 import { hashAlbumPassword, verifyAlbumPassword } from "@/lib/album-password";
 import {
@@ -103,23 +104,42 @@ export async function createAlbumAction(rawInput: unknown) {
     if (!existing) break;
     shareSlug = generateSlug(input.title);
   }
+  if (
+    await prisma.album.findUnique({ where: { shareSlug }, select: { id: true } })
+  ) {
+    return {
+      error: "Could not generate a unique album link. Please try again.",
+    };
+  }
 
-  const album = await prisma.album.create({
-    data: {
-      ownerId: user.id,
-      title: input.title,
-      description: input.description?.trim() || null,
-      shareSlug,
-      visibility,
-      passwordHash,
-      allowDownload: input.allowDownload ?? true,
-      expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
-    },
-    select: { id: true, shareSlug: true },
-  });
+  try {
+    const album = await prisma.album.create({
+      data: {
+        ownerId: user.id,
+        title: input.title,
+        description: input.description?.trim() || null,
+        shareSlug,
+        visibility,
+        passwordHash,
+        allowDownload: input.allowDownload ?? true,
+        expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+      },
+      select: { id: true, shareSlug: true },
+    });
 
-  revalidatePath("/dashboard");
-  return { success: true, albumId: album.id, shareSlug: album.shareSlug };
+    revalidatePath("/dashboard");
+    return { success: true, albumId: album.id, shareSlug: album.shareSlug };
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      return {
+        error: "Could not generate a unique album link. Please try again.",
+      };
+    }
+    throw error;
+  }
 }
 
 export type UpdateAlbumInput = {
